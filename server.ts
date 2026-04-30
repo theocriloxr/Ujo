@@ -4,11 +4,16 @@ import path from 'path';
 import cors from 'cors';
 import sqlite3 from 'sqlite3';
 import { open, Database } from 'sqlite';
-import { HABridge } from './ha_bridge';
+import { HABridge } from './ha_bridge.ts';
+import http from 'http';
+import { Server } from 'socket.io';
+import jwt from 'jsonwebtoken';
+import QRCode from 'qrcode';
 
 // --- CONFIGURATION ---
 const PORT = 3000;
 const DB_PATH = process.env.DATABASE_URL || 'ujo_os.db';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
 // --- HOME ASSISTANT BRIDGE ---
 const haBridge = new HABridge({
@@ -18,6 +23,7 @@ const haBridge = new HABridge({
 
 // --- DATABASE SETUP ---
 let db: Database;
+let io: Server;
 
 async function initDb() {
   db = await open({
@@ -130,6 +136,11 @@ async function initDb() {
     await db.run("INSERT INTO system_config (key, value) VALUES ('duress_active', '0')");
   }
 
+  const asstNameExists = await db.get("SELECT value FROM system_config WHERE key = 'assistant_name'");
+  if (!asstNameExists) {
+    await db.run("INSERT INTO system_config (key, value) VALUES ('assistant_name', 'Ujo')");
+  }
+
   const voiceExists = await db.get("SELECT persona FROM voice_settings LIMIT 1");
   if (!voiceExists) {
     await db.run("INSERT INTO voice_settings (key, persona, pitch, rate, accent) VALUES ('current', 'JARVIS', 0.8, 0.95, 'British accent personality')");
@@ -153,6 +164,7 @@ class StateManager {
     const subscription = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
     const powerSource = await db.get("SELECT value FROM system_config WHERE key = 'power_source'");
     const duressActive = await db.get("SELECT value FROM system_config WHERE key = 'duress_active'");
+    const assistantName = await db.get("SELECT value FROM system_config WHERE key = 'assistant_name'");
     const voice = await db.get("SELECT * FROM voice_settings WHERE key = 'current'");
     const alerts = await db.all('SELECT * FROM alerts WHERE confirmed = 0');
     const accessProfiles = await db.all('SELECT * FROM access_profiles');
@@ -176,6 +188,7 @@ class StateManager {
       subscriptionActive: subscription?.value === '1',
       powerSource: powerSource?.value,
       duressActive: duressActive?.value === '1',
+      assistantName: assistantName?.value || 'Ujo',
       voice,
       alerts, 
       energy, 
@@ -183,12 +196,21 @@ class StateManager {
     };
   }
 
+  async broadcastUpdate() {
+    if (io) {
+      const data = await this.getStates();
+      io.emit('state_update', data);
+    }
+  }
+
   async updateDevice(id: string, state: string) {
     await db.run('UPDATE devices SET state = ? WHERE id = ?', [state, id]);
+    await this.broadcastUpdate();
   }
 
   async setMode(mode: string) {
     await db.run("UPDATE system_config SET value = ? WHERE key = 'mode'", [mode]);
+    await this.broadcastUpdate();
   }
 
   // --- GRID GUARDIAN: Load Shedding Logic ---
@@ -205,6 +227,7 @@ class StateManager {
         'energy'
       );
     }
+    await this.broadcastUpdate();
   }
 
   // --- DURESS PROTOCOL: Silent Security ---
@@ -243,11 +266,13 @@ class StateManager {
   async triggerAnomaly(title: string, message: string, severity: string, type: string = 'anomaly') {
     const id = `alert_${Date.now()}`;
     await db.run('INSERT INTO alerts (id, title, message, severity, type) VALUES (?, ?, ?, ?, ?)', [id, title, message, severity, type]);
+    await this.broadcastUpdate();
     return id;
   }
 
   async confirmAlert(id: string, action: 'Confirm' | 'Ignore') {
     await db.run('UPDATE alerts SET confirmed = 1 WHERE id = ?', [id]);
+    await this.broadcastUpdate();
     return { success: true, message: `Alert ${id} was ${action.toLowerCase()}ed.` };
   }
 
@@ -335,6 +360,14 @@ async function startServer() {
   await haBridge.connect();
   
   const app = express();
+  const server = http.createServer(app);
+  io = new Server(server, { cors: { origin: '*' } });
+
+  io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+    socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
+  });
+
   app.use(cors());
   app.use(express.json());
 
@@ -383,6 +416,13 @@ async function startServer() {
   app.post('/api/device/toggle', async (req, res) => {
     const { id, state } = req.body;
     await stateManager.updateDevice(id, state);
+    res.json({ success: true });
+  });
+
+  app.post('/api/system/assistant-name', async (req, res) => {
+    const { name } = req.body;
+    await db.run("UPDATE system_config SET value = ? WHERE key = 'assistant_name'", [name]);
+    await stateManager.broadcastUpdate();
     res.json({ success: true });
   });
 
@@ -477,22 +517,118 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Software Update Endpoint
+  // OVER-THE-AIR (OTA) UPDATE MANAGER
   app.post('/api/system/check-update', async (req, res) => {
     const sub = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
     if (sub?.value !== '1') {
       return res.status(403).json({ success: false, message: 'Cloud updates require an active Ujo SaaS subscription.' });
     }
 
-    // Force an update notification for demo
     await db.run("UPDATE system_config SET value = '1' WHERE key = 'software_update'");
     await stateManager.triggerAnomaly(
-      'System-Wide Update Ready',
-      'Ujo OS V2.1.0 & Mobile App V1.2.0 are ready. Cloud-sync verified. Install updates now?',
+      'System-Wide OTA Update Ready',
+      'Ujo OS V2.1.0 & Mobile App V1.2.0 are ready. Edge vision models have been downloaded. Install updates now?',
       'medium',
       'system'
     );
     res.json({ success: true });
+  });
+
+  // WHATSAPP VENDOR DISPATCH
+  app.post('/api/vendor/dispatch', async (req, res) => {
+    const { vendorType } = req.body; // 'diesel' or 'water'
+    // Simulated WhatsApp API call
+    console.log(`[WHATSAPP API] Sending message to ${vendorType === 'diesel' ? process.env.VENDOR_DIESEL_CONTACT : '+local'}`);
+    
+    await stateManager.triggerAnomaly(
+      'Vendor Auto-Dispatch',
+      `WhatsApp message sent to local ${vendorType} vendor. Expect delivery shortly.`,
+      'low',
+      'vendor'
+    );
+    res.json({ success: true, message: `Dispatched ${vendorType} via WhatsApp Edge Module.` });
+  });
+
+  // GUEST QR CODE GENERATOR
+  app.post('/api/security/guest-code', async (req, res) => {
+    // Generate a temporary JWT for guest access to the living room
+    const token = jwt.sign({ role: 'guest', room: 'living_room', exp: Math.floor(Date.now() / 1000) + (60 * 60) }, JWT_SECRET);
+    
+    // Generate the URL that the guest scans
+    const accessUrl = `http://ujo-home.local/guest?token=${token}`;
+    const qrCodeImage = await QRCode.toDataURL(accessUrl);
+    
+    res.json({ success: true, url: accessUrl, qrCode: qrCodeImage });
+  });
+
+  // TEXT-TO-SPEECH (TTS) ENDPOINT
+  // We use the cloud-based Google Gen AI (or potentially ElevenLabs/OpenAI) to give it a natural voice.
+  app.post('/api/tts', async (req, res) => {
+    const { text, persona } = req.body;
+    try {
+      if (process.env.ELEVENLABS_API_KEY) {
+         // Placeholder for ElevenLabs integration
+         console.log('Would call ElevenLabs API here');
+      }
+
+      // Defaulting to Google Gemini TTS as configured in the system
+      const { GoogleGenAI, Modality } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const voiceName = (persona?.toLowerCase() === 'onyx' || persona?.toLowerCase() === 'jarvis') ? 'Puck' : 'Kore'; 
+      
+      const ttsResp = await ai.models.generateContent({
+         model: "gemini-3.1-flash-tts-preview",
+         contents: [{ parts: [{ text }] }],
+         config: {
+           responseModalities: [Modality.AUDIO],
+           speechConfig: {
+             voiceConfig: { prebuiltVoiceConfig: { voiceName } }
+           }
+         }
+      });
+      
+      const base64Audio = ttsResp.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+         const audioBuffer = Buffer.from(base64Audio, 'base64');
+         res.set('Content-Type', 'audio/wav');
+         return res.send(audioBuffer);
+      }
+      res.status(500).json({ error: "Failed to parse TTS buffer" });
+    } catch (err) {
+      console.error('Cloud TTS Error:', err);
+      res.status(500).json({ error: "TTS Generation Failed" });
+    }
+  });
+
+  app.post('/api/system/simulate-tracking', async (req, res) => {
+    // Spatial Ghosting Scenario Simulation
+    io.emit('state-update'); // Ping client to refresh just in case
+    
+    const sendPulse = (msg: string, delay: number) => {
+       setTimeout(() => io.emit('spatial-pulse', msg), delay);
+    };
+
+    sendPulse('[mmWave 60GHz]: User A detected in Kitchen. Confidence: 100%. Audio locked.', 500);
+    sendPulse('[mmWave 60GHz]: User C enters Kitchen. Identity tracking split. Confidence: 50% each.', 3500);
+    sendPulse('[Ghosting/Split detected]: User C walks to Hallway. Confidence below 90% threshold.', 6500);
+    sendPulse('[Sticky Audio Protocol]: Micro-Doppler Gait mismatch. Audio retains in Kitchen.', 8500);
+    
+    // Frictionless Correction Simulation
+    sendPulse('[Edge Vision ESP32-CAM]: Captured face. Local embedding match -> User C. Deleted frame.', 10500);
+    sendPulse('[Sensor Fusion Override]: Radar ghosting resolved via vision. Audio locked to Kitchen for User A.', 12500);
+    sendPulse('[Simulating Sensor Error]: Moving audio to Hallway arbitrarily.', 15500);
+    sendPulse('User A: "Ujo, I\'m here."', 18000);
+    sendPulse('[Spatial Re-anchoring Protocol]: Matched User A voice print via Kitchen mic array. Reversing move. Updating radar weights.', 20500);
+
+    res.json({ success: true, message: 'Tracking override initiated' });
+  });
+
+  app.post('/api/system/simulate-coadmin', async (req, res) => {
+    io.emit('spatial-pulse', 'Co-Admin Parity Conflict: "Lock house" (Husband) vs "Leave open" (Wife) received simultaneously.');
+    setTimeout(() => {
+      io.emit('spatial-pulse', 'Safety Pause Initiated: Cryptographic authority identical.');
+    }, 2000);
+    res.json({ success: true, message: 'I am receiving conflicting Admin commands. Please confirm the final decision.'});
   });
 
   // Toggle Subscription (Demo/Dev)
@@ -528,6 +664,19 @@ async function startServer() {
     res.json({ success: true, id });
   });
 
+  // IMPROVEMENT: Background Simulation (Every 30 seconds)
+  setInterval(async () => {
+    const chance = Math.random();
+    if (chance > 0.95) { // 5% chance of a random anomaly
+      await stateManager.triggerAnomaly(
+        "Voltage Fluctuation", 
+        "Unstable grid frequency detected. Stabilizing via Inverter...", 
+        "medium", 
+        "energy"
+      );
+    }
+  }, 30000);
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -543,7 +692,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`Ujo OS Server running on http://localhost:${PORT}`);
   });
 }

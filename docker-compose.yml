@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  ujo-core:
+    build: .
+    container_name: ujo-core
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=${JWT_SECRET}
+      - HA_URL=${HA_URL}
+      - HA_TOKEN=${HA_TOKEN}
+    volumes:
+      - ujo_data:/app/data
+    network_mode: "host" # Better for local IoT discovery (mDNS/Zeroconf)
+
+  # Optional edge proxy (Nginx) and time-series DB (InfluxDB) could go here
+  
+volumes:
+  ujo_data:
