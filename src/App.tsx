@@ -116,15 +116,60 @@ export default function App() {
   const [nlpResponse, setNlpResponse] = useState<string | null>(null);
   const [isTraining, setIsTraining] = useState(false);
   const [trainingStep, setTrainingStep] = useState(0);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState<'intro' | 'scanning' | 'complete'>('intro');
+  const [scannedDevices, setScannedDevices] = useState<string[]>([]);
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 17) return "Good afternoon";
+    return "Good evening";
+  };
 
   const speakResponse = (text: string) => {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.pitch = 0.8;
-    utterance.rate = 1.0;
+    utterance.pitch = 0.85;
+    utterance.rate = 0.95;
     window.speechSynthesis.speak(utterance);
   };
+
+  useEffect(() => {
+    const isFirstRun = !localStorage.getItem('ujo_setup_complete');
+    if (isFirstRun) {
+      setShowOnboarding(true);
+    }
+  }, []);
+
+  const handleStartSetup = () => {
+    const greeting = getGreeting();
+    const intro = `${greeting}. My name is Ujo, and I am your personal smart home assistant. I have been designed to keep your home secure, efficient, and proactive. I monitor your energy usage, protect your appliances from power surges, and manage access for your visitors. My intelligence is fully localized, meaning your data never leaves these walls. Let us begin by verifying my connection to your installed devices.`;
+    speakResponse(intro);
+    setOnboardingStep('scanning');
+  };
+
+  useEffect(() => {
+    if (onboardingStep === 'scanning' && data) {
+      const devicesToScan = data.devices;
+      let index = 0;
+      const interval = setInterval(() => {
+        if (index < devicesToScan.length) {
+          setScannedDevices(prev => [...prev, devicesToScan[index].id]);
+          index++;
+        } else {
+          clearInterval(interval);
+          setTimeout(() => {
+            setOnboardingStep('complete');
+            speakResponse("All systems verified. Your home is now under my protection.");
+            localStorage.setItem('ujo_setup_complete', 'true');
+          }, 1000);
+        }
+      }, 800);
+      return () => clearInterval(interval);
+    }
+  }, [onboardingStep, data]);
 
   const startTraining = () => {
     setIsTraining(true);
@@ -521,6 +566,93 @@ export default function App() {
                  Record Sample
                </button>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Global Onboarding Overlay */}
+      <AnimatePresence>
+        {showOnboarding && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }} 
+            className="fixed inset-0 z-[100] bg-[var(--bg)] grid place-items-center p-6"
+          >
+            <div className="max-w-2xl w-full">
+              {onboardingStep === 'intro' && (
+                <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="text-center flex flex-col items-center">
+                  <div className="w-20 h-20 bg-[var(--accent)] rounded-[2rem] grid place-items-center mb-8 shadow-2xl shadow-lime-500/20">
+                    <Activity size={32} className="text-black" />
+                  </div>
+                  <h2 className="text-4xl font-black italic uppercase tracking-tighter mb-4">Welcome to Ujo OS</h2>
+                  <p className="text-zinc-400 text-lg mb-10 leading-relaxed">
+                    I am Ujo, your intelligent home companion. I protect your power, secure your data, and anticipate your needs.
+                  </p>
+                  <button 
+                    onClick={handleStartSetup}
+                    className="group flex items-center gap-4 px-10 py-6 bg-[var(--accent)] text-black rounded-[2.5rem] font-black uppercase tracking-widest hover:scale-105 transition-all shadow-xl shadow-lime-500/10"
+                  >
+                    Initiate Neural Link <ChevronRight size={24} className="group-hover:translate-x-1 transition-transform" />
+                  </button>
+                </motion.div>
+              )}
+
+              {onboardingStep === 'scanning' && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bento-card p-10 bg-zinc-900">
+                  <div className="flex justify-between items-center mb-10">
+                    <div>
+                      <h3 className="text-2xl font-black italic uppercase tracking-tight">Integrity Scan</h3>
+                      <p className="text-xs font-mono tech-accent uppercase tracking-widest">Probing Z-Bridge Matrix...</p>
+                    </div>
+                    <RefreshCw size={24} className="animate-spin text-[var(--accent)]" />
+                  </div>
+                  
+                  <div className="flex flex-col gap-4">
+                    {data.devices.map(device => {
+                      const isScanned = scannedDevices.includes(device.id);
+                      return (
+                        <motion.div 
+                          key={device.id}
+                          animate={{ opacity: isScanned ? 1 : 0.3 }}
+                          className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-2xl border tech-border"
+                        >
+                          <div className="flex items-center gap-4">
+                            <div className={`p-2 rounded-lg ${isScanned ? 'bg-lime-500/20 text-lime-500' : 'bg-zinc-800 text-zinc-500'}`}>
+                              <Link size={16} />
+                            </div>
+                            <span className="text-sm font-bold">{device.name}</span>
+                          </div>
+                          <span className={`text-[10px] font-mono uppercase ${isScanned ? 'text-lime-500' : 'text-zinc-600'}`}>
+                            {isScanned ? 'Verified' : 'Pending'}
+                          </span>
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+
+              {onboardingStep === 'complete' && (
+                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center flex flex-col items-center">
+                  <div className="w-24 h-24 bg-lime-500 rounded-full grid place-items-center mb-8 shadow-2xl shadow-lime-500/40">
+                    <Shield size={40} className="text-black" />
+                  </div>
+                  <h2 className="text-4xl font-black italic uppercase tracking-tighter mb-4">Protection Active</h2>
+                  <p className="text-zinc-400 text-lg mb-10 leading-relaxed font-mono">
+                    NEURAL_LINK: STABLE<br/>
+                    SECURITY_ARMOR: ONLINE<br/>
+                    GREETING: COMPLETE
+                  </p>
+                  <button 
+                    onClick={() => setShowOnboarding(false)}
+                    className="px-12 py-6 border-2 border-[var(--accent)] text-[var(--accent)] rounded-[2.5rem] font-black uppercase tracking-widest hover:bg-[var(--accent)] hover:text-black transition-all shadow-xl shadow-lime-500/5"
+                  >
+                    Enter Command Center
+                  </button>
+                </motion.div>
+              )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
