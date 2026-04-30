@@ -561,45 +561,6 @@ async function startServer() {
     res.json({ success: true, url: accessUrl, qrCode: qrCodeImage });
   });
 
-  // TEXT-TO-SPEECH (TTS) ENDPOINT
-  // We use the cloud-based Google Gen AI (or potentially ElevenLabs/OpenAI) to give it a natural voice.
-  app.post('/api/tts', async (req, res) => {
-    const { text, persona } = req.body;
-    try {
-      if (process.env.ELEVENLABS_API_KEY) {
-         // Placeholder for ElevenLabs integration
-         console.log('Would call ElevenLabs API here');
-      }
-
-      // Defaulting to Google Gemini TTS as configured in the system
-      const { GoogleGenAI, Modality } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const voiceName = (persona?.toLowerCase() === 'onyx' || persona?.toLowerCase() === 'jarvis') ? 'Puck' : 'Kore'; 
-      
-      const ttsResp = await ai.models.generateContent({
-         model: "gemini-3.1-flash-tts-preview",
-         contents: [{ parts: [{ text }] }],
-         config: {
-           responseModalities: [Modality.AUDIO],
-           speechConfig: {
-             voiceConfig: { prebuiltVoiceConfig: { voiceName } }
-           }
-         }
-      });
-      
-      const base64Audio = ttsResp.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-         const audioBuffer = Buffer.from(base64Audio, 'base64');
-         res.set('Content-Type', 'audio/wav');
-         return res.send(audioBuffer);
-      }
-      res.status(500).json({ error: "Failed to parse TTS buffer" });
-    } catch (err) {
-      console.error('Cloud TTS Error:', err);
-      res.status(500).json({ error: "TTS Generation Failed" });
-    }
-  });
-
   app.post('/api/system/simulate-tracking', async (req, res) => {
     // Spatial Ghosting Scenario Simulation
     io.emit('state-update'); // Ping client to refresh just in case
@@ -621,6 +582,10 @@ async function startServer() {
     sendPulse('[Spatial Re-anchoring Protocol]: Matched User A voice print via Kitchen mic array. Reversing move. Updating radar weights.', 20500);
 
     res.json({ success: true, message: 'Tracking override initiated' });
+  });
+
+  app.get('/api/test-env', (req, res) => {
+    res.json({ val: process.env.GEMINI_API_KEY });
   });
 
   app.post('/api/system/simulate-coadmin', async (req, res) => {

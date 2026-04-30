@@ -153,25 +153,39 @@ export default function App() {
   const speakResponse = async (text: string) => {
     try {
       // 1. Try Cloud Native AI Voice for Natural Conversation 
-      const ttsRes = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, persona: data?.voice?.persona })
+      const persona = data?.voice?.persona;
+      const voiceName = (persona?.toLowerCase() === 'onyx' || persona?.toLowerCase() === 'jarvis') ? 'Puck' : 'Kore'; 
+      
+      const ttsResp = await ai.models.generateContent({
+         model: "gemini-3.1-flash-tts-preview",
+         contents: text,
+         config: {
+           responseModalities: [Modality.AUDIO],
+           speechConfig: {
+             voiceConfig: { prebuiltVoiceConfig: { voiceName } }
+           }
+         }
       });
-
-      if (ttsRes.ok) {
-        const audioBlob = await ttsRes.blob();
-        const url = URL.createObjectURL(audioBlob);
-        const audio = new Audio(url);
-        
-        // Slightly boost playback speed dynamically
-        audio.playbackRate = data?.voice?.rate || 1.05; 
-        
-        await audio.play();
-        return;
+      
+      const base64Audio = ttsResp.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+         const binaryString = atob(base64Audio);
+         const bytes = new Uint8Array(binaryString.length);
+         for (let i = 0; i < binaryString.length; i++) {
+             bytes[i] = binaryString.charCodeAt(i);
+         }
+         const audioBlob = new Blob([bytes.buffer], { type: 'audio/wav' });
+         const url = URL.createObjectURL(audioBlob);
+         const audio = new Audio(url);
+         
+         // Slightly boost playback speed dynamically
+         audio.playbackRate = data?.voice?.rate || 1.05; 
+         
+         await audio.play();
+         return;
       }
     } catch (e) {
-      console.warn("Cloud TTS unreachable, falling back to offline browser TTS:", e);
+      console.warn("Cloud TTS failed, falling back to offline browser TTS:", e);
     }
     
     // 2. Offline Fallback (Browser built-in TTS)
