@@ -31,13 +31,22 @@ async function initDb() {
       value TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS voice_settings (
+      key TEXT PRIMARY KEY,
+      persona TEXT DEFAULT 'JARVIS',
+      pitch REAL DEFAULT 0.85,
+      rate REAL DEFAULT 0.95,
+      accent TEXT DEFAULT 'British'
+    );
+
     CREATE TABLE IF NOT EXISTS devices (
       id TEXT PRIMARY KEY,
       name TEXT,
       type TEXT,
       state TEXT,
       status TEXT,
-      power_usage REAL DEFAULT 0
+      power_usage REAL DEFAULT 0,
+      load_type TEXT DEFAULT 'Essential' -- 'Essential' or 'Heavy'
     );
 
     CREATE TABLE IF NOT EXISTS alerts (
@@ -69,6 +78,10 @@ async function initDb() {
 
   // Migration for V2 columns
   try {
+    await db.exec('ALTER TABLE devices ADD COLUMN load_type TEXT DEFAULT \'Essential\'');
+  } catch (e) { /* ignore */ }
+
+  try {
     await db.exec('ALTER TABLE devices ADD COLUMN power_usage REAL DEFAULT 0');
   } catch (e) { /* ignore if already exists */ }
 
@@ -79,11 +92,12 @@ async function initDb() {
   // Initial Seed
   const deviceCount = await db.get('SELECT COUNT(*) as count FROM devices');
   if (deviceCount?.count === 0) {
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage) VALUES ('light_1', 'Living Room Light', 'light', 'off', 'online', 0)");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage) VALUES ('lock_1', 'Front Door Lock', 'lock', 'locked', 'online', 0)");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage) VALUES ('fridge_1', 'Kitchen Fridge', 'appliance', 'normal', 'online', 85)");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage) VALUES ('thermostat_1', 'Main Thermostat', 'climate', '21°C', 'online', 450)");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage) VALUES ('gas_sensor', 'Kitchen Gas', 'sensor', '92%', 'online', 0)");
+    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('light_1', 'Living Room Light', 'light', 'off', 'online', 0, 'Essential')");
+    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('lock_1', 'Front Door Lock', 'lock', 'locked', 'online', 0, 'Essential')");
+    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('fridge_1', 'Kitchen Fridge', 'appliance', 'normal', 'online', 85, 'Essential')");
+    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('ac_1', 'Master Bedroom AC', 'climate', 'off', 'online', 1500, 'Heavy')");
+    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('pump_1', 'Borehole Pump', 'appliance', 'off', 'online', 1200, 'Heavy')");
+    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('gas_sensor', 'Kitchen Gas', 'sensor', '92%', 'online', 0, 'Essential')");
   }
 
   const modeExists = await db.get("SELECT value FROM system_config WHERE key = 'mode'");
@@ -94,6 +108,31 @@ async function initDb() {
   const locationExists = await db.get("SELECT value FROM system_config WHERE key = 'location'");
   if (!locationExists) {
     await db.run("INSERT INTO system_config (key, value) VALUES ('location', 'Home')");
+  }
+
+  const updateExists = await db.get("SELECT value FROM system_config WHERE key = 'software_update'");
+  if (!updateExists) {
+    await db.run("INSERT INTO system_config (key, value) VALUES ('software_update', '0')");
+  }
+
+  const subExists = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
+  if (!subExists) {
+    await db.run("INSERT INTO system_config (key, value) VALUES ('subscription_active', '0')");
+  }
+
+  const pwrExists = await db.get("SELECT value FROM system_config WHERE key = 'power_source'");
+  if (!pwrExists) {
+    await db.run("INSERT INTO system_config (key, value) VALUES ('power_source', 'Grid')");
+  }
+
+  const durExists = await db.get("SELECT value FROM system_config WHERE key = 'duress_active'");
+  if (!durExists) {
+    await db.run("INSERT INTO system_config (key, value) VALUES ('duress_active', '0')");
+  }
+
+  const voiceExists = await db.get("SELECT persona FROM voice_settings LIMIT 1");
+  if (!voiceExists) {
+    await db.run("INSERT INTO voice_settings (key, persona, pitch, rate, accent) VALUES ('current', 'JARVIS', 0.8, 0.95, 'British accent personality')");
   }
 
   const accessCount = await db.get('SELECT COUNT(*) as count FROM access_profiles');
@@ -110,20 +149,38 @@ class StateManager {
     const devices = await db.all('SELECT * FROM devices');
     const mode = await db.get("SELECT value FROM system_config WHERE key = 'mode'");
     const location = await db.get("SELECT value FROM system_config WHERE key = 'location'");
+    const updateAvailable = await db.get("SELECT value FROM system_config WHERE key = 'software_update'");
+    const subscription = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
+    const powerSource = await db.get("SELECT value FROM system_config WHERE key = 'power_source'");
+    const duressActive = await db.get("SELECT value FROM system_config WHERE key = 'duress_active'");
+    const voice = await db.get("SELECT * FROM voice_settings WHERE key = 'current'");
     const alerts = await db.all('SELECT * FROM alerts WHERE confirmed = 0');
     const accessProfiles = await db.all('SELECT * FROM access_profiles');
     
     // Synthetic Energy Data
     const energy = {
-      grid: Math.random() > 0.3 ? 'Connected' : 'Failing',
-      voltage: 228, // V
-      status: 'Stable',
+      grid: powerSource?.value === 'Grid' ? 'Connected' : 'Failing',
+      source: powerSource?.value || 'Grid',
+      voltage: powerSource?.value === 'Grid' ? 228 : (powerSource?.value === 'Inverter' ? 220 : 0),
+      status: powerSource?.value === 'Grid' ? 'Stable' : 'Battery Optimal',
       battery: 88,
       solar: 1.2, // kW
       forecast: 'Overcast Tomorrow'
     };
 
-    return { devices, mode: mode?.value, location: location?.value, alerts, energy, accessProfiles };
+    return { 
+      devices, 
+      mode: mode?.value, 
+      location: location?.value, 
+      updateAvailable: updateAvailable?.value === '1',
+      subscriptionActive: subscription?.value === '1',
+      powerSource: powerSource?.value,
+      duressActive: duressActive?.value === '1',
+      voice,
+      alerts, 
+      energy, 
+      accessProfiles 
+    };
   }
 
   async updateDevice(id: string, state: string) {
@@ -132,6 +189,51 @@ class StateManager {
 
   async setMode(mode: string) {
     await db.run("UPDATE system_config SET value = ? WHERE key = 'mode'", [mode]);
+  }
+
+  // --- GRID GUARDIAN: Load Shedding Logic ---
+  async setPowerState(source: 'Grid' | 'Inverter' | 'Generator') {
+    await db.run("UPDATE system_config SET value = ? WHERE key = 'power_source'", [source]);
+    
+    if (source === 'Inverter') {
+      // Automatic Load Shedding: Turn off "Heavy" devices to protect battery
+      await db.run("UPDATE devices SET state = 'off' WHERE load_type = 'Heavy'");
+      await this.triggerAnomaly(
+        'Load Shedding Active',
+        'Grid power lost. Switched to Inverter. Heavy appliances (AC, Pump) shut down to protect battery life.',
+        'medium',
+        'energy'
+      );
+    }
+  }
+
+  // --- DURESS PROTOCOL: Silent Security ---
+  async unlockWithPin(pin: string) {
+    const NORMAL_PIN = '1234';
+    const DURESS_PIN = '9999';
+
+    if (pin === NORMAL_PIN) {
+      await this.updateDevice('lock_1', 'unlocked');
+      await db.run("UPDATE system_config SET value = '0' WHERE key = 'duress_active'");
+      return { success: true, message: 'Welcome. Door unlocked.' };
+    } 
+    
+    if (pin === DURESS_PIN) {
+      // Duress: Unlock door normally but trigger silent flag
+      await this.updateDevice('lock_1', 'unlocked');
+      await db.run("UPDATE system_config SET value = '1' WHERE key = 'duress_active'");
+      
+      await this.triggerAnomaly(
+        'Silent Duress Alert',
+        'Duress code entered at Front Door. Security protocols initiated silently.',
+        'critical',
+        'anomaly'
+      );
+      
+      return { success: true, message: 'Welcome. Door unlocked.' }; // UI remains "normal"
+    }
+
+    return { success: false, message: 'Invalid PIN' };
   }
 
   async setLocation(location: string) {
@@ -366,6 +468,64 @@ async function startServer() {
       }
     }
     res.json({ success: true, synced: devices.length });
+  });
+
+  // Voice Settings Update
+  app.post('/api/voice/settings', async (req, res) => {
+    const { persona, pitch, rate } = req.body;
+    await db.run('UPDATE voice_settings SET persona = ?, pitch = ?, rate = ? WHERE key = \'current\'', [persona, pitch, rate]);
+    res.json({ success: true });
+  });
+
+  // Software Update Endpoint
+  app.post('/api/system/check-update', async (req, res) => {
+    const sub = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
+    if (sub?.value !== '1') {
+      return res.status(403).json({ success: false, message: 'Cloud updates require an active Ujo SaaS subscription.' });
+    }
+
+    // Force an update notification for demo
+    await db.run("UPDATE system_config SET value = '1' WHERE key = 'software_update'");
+    await stateManager.triggerAnomaly(
+      'System-Wide Update Ready',
+      'Ujo OS V2.1.0 & Mobile App V1.2.0 are ready. Cloud-sync verified. Install updates now?',
+      'medium',
+      'system'
+    );
+    res.json({ success: true });
+  });
+
+  // Toggle Subscription (Demo/Dev)
+  app.post('/api/system/toggle-subscription', async (req, res) => {
+    const current = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
+    const nextValue = current?.value === '1' ? '0' : '1';
+    await db.run("UPDATE system_config SET value = ? WHERE key = 'subscription_active'", [nextValue]);
+    res.json({ success: true, active: nextValue === '1' });
+  });
+
+  // POWER SOURCE ENDPOINT (Grid Guardian)
+  app.post('/api/power-state', async (req, res) => {
+    const { source } = req.body;
+    await stateManager.setPowerState(source);
+    res.json({ success: true, source });
+  });
+
+  // SECURITY UNLOCK (Duress Logic)
+  app.post('/api/security/unlock', async (req, res) => {
+    const { pin } = req.body;
+    const result = await stateManager.unlockWithPin(pin);
+    res.json(result);
+  });
+
+  // PREDICTIVE ENGINE SIMULATOR
+  app.post('/api/simulate-time', async (req, res) => {
+    const id = await stateManager.triggerAnomaly(
+      'Spoilage Warning',
+      'Fridge ethylene gas spike detected. Tomatoes in drawer are likely spoiling. Add replacements to grocery list?',
+      'medium',
+      'health'
+    );
+    res.json({ success: true, id });
   });
 
   // Vite middleware for development

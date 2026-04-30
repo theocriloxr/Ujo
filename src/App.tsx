@@ -18,7 +18,8 @@ import {
   Send,
   Eye,
   Link,
-  RefreshCw
+  RefreshCw,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -30,6 +31,7 @@ interface Device {
   state: string;
   status: string;
   power_usage: number;
+  load_type: 'Essential' | 'Heavy';
 }
 
 interface EnergyData {
@@ -54,8 +56,18 @@ interface SystemData {
   devices: Device[];
   mode: string;
   location: string;
+  updateAvailable: boolean;
+  subscriptionActive: boolean;
+  powerSource: 'Grid' | 'Inverter' | 'Generator';
+  duressActive: boolean;
+  voice: {
+    persona: string;
+    pitch: number;
+    rate: number;
+  };
   alerts: Alert[];
   energy: EnergyData;
+  accessProfiles: any[];
 }
 
 interface HAStatus {
@@ -131,8 +143,16 @@ export default function App() {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.pitch = 0.85;
-    utterance.rate = 0.95;
+    
+    // Applying data-driven voice settings
+    if (data?.voice) {
+      utterance.pitch = data.voice.pitch;
+      utterance.rate = data.voice.rate;
+    } else {
+      utterance.pitch = 0.85;
+      utterance.rate = 0.95;
+    }
+    
     window.speechSynthesis.speak(utterance);
   };
 
@@ -213,6 +233,12 @@ export default function App() {
 
       const jsonStates = await resStates.json();
       const jsonHa = await resHa.json();
+      
+      // Proactive Update Speak
+      if (jsonStates.updateAvailable && !data?.updateAvailable) {
+        speakResponse("A system software update is available. Please review the details in the command center.");
+      }
+      
       setData(jsonStates);
       setHaStatus(jsonHa);
       setLoading(false);
@@ -231,10 +257,50 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const [showKeypad, setShowKeypad] = useState(false);
+  const [pinBuffer, setPinBuffer] = useState('');
+  const [lockedActionID, setLockedActionID] = useState<string | null>(null);
+
+  const handleKeypadPress = (num: string) => {
+    if (pinBuffer.length < 4) setPinBuffer(prev => prev + num);
+  };
+
+  const submitPin = async () => {
+    try {
+      const res = await fetch('/api/security/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pinBuffer })
+      });
+      const result = await res.json();
+      if (result.success) {
+        setShowKeypad(false);
+        setPinBuffer('');
+        speakResponse(result.message);
+        fetchStates();
+      } else {
+        speakResponse("Access denied. Invalid signature.");
+        setPinBuffer('');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const toggleDevice = async (id: string, currentState: string) => {
     let nextState = '';
+    
+    // Security Gate for Lock
+    if (id.startsWith('lock') && currentState === 'locked') {
+      setShowKeypad(true);
+      setLockedActionID(id);
+      return;
+    }
+
     if (id.startsWith('light')) nextState = currentState === 'on' ? 'off' : 'on';
     else if (id.startsWith('lock')) nextState = currentState === 'locked' ? 'unlocked' : 'locked';
+    else if (id.startsWith('ac')) nextState = currentState === 'on' ? 'off' : 'on';
+    else if (id.startsWith('pump')) nextState = currentState === 'on' ? 'off' : 'on';
     else return;
 
     try {
@@ -334,6 +400,52 @@ export default function App() {
     fetchStates();
   };
 
+  const updateVoiceSetting = async (persona: string, pitch: number, rate: number) => {
+    await fetch('/api/voice/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona, pitch, rate })
+    });
+    fetchStates();
+    speakResponse(`Voice personality changed to ${persona}.`);
+  };
+
+  const checkSoftwareUpdate = async () => {
+    try {
+      const res = await fetch('/api/system/check-update', { method: 'POST' });
+      const result = await res.json();
+      if (!res.ok) {
+        speakResponse(result.message);
+        return;
+      }
+      fetchStates();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const toggleSubscription = async () => {
+    await fetch('/api/system/toggle-subscription', { method: 'POST' });
+    fetchStates();
+    const nextActive = !data?.subscriptionActive;
+    speakResponse(nextActive ? "SaaS Pulse activated. Cloud features and updates enabled." : "SaaS Pulse deactivated. Offline mode only.");
+  };
+
+  const switchPower = async (source: 'Grid' | 'Inverter' | 'Generator') => {
+    await fetch('/api/power-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source })
+    });
+    fetchStates();
+    speakResponse(`Circuit shift. Now operating on ${source} power. Grid Guardian is scaling loads accordingly.`);
+  };
+
+  const simulatePredictive = async () => {
+    await fetch('/api/simulate-time', { method: 'POST' });
+    fetchStates();
+  };
+
   if (loading || !data) {
     return (
       <div className="min-h-screen grid place-items-center bg-[var(--bg)]">
@@ -388,7 +500,17 @@ export default function App() {
         <div className="bento-card bg-gradient-to-br from-zinc-900 to-black">
           <div className="flex justify-between items-center mb-4">
             <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest">Energy Pulse</p>
-            <Zap size={14} className="tech-accent" />
+            <div className="flex gap-1">
+              {['Grid', 'Inverter'].map(p => (
+                <button 
+                  key={p} 
+                  onClick={() => switchPower(p as any)}
+                  className={`text-[8px] px-2 py-1 rounded-md font-bold uppercase transition-all ${data.powerSource === p ? 'bg-[var(--accent)] text-black' : 'bg-zinc-800 text-zinc-500'}`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="text-center p-3 bg-zinc-800/40 rounded-2xl">
@@ -504,6 +626,26 @@ export default function App() {
                   <div className="indicator active" />
                 </div>
              </div>
+
+             <div className="mt-8 pt-8 border-t border-zinc-800">
+                <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest mb-4">Voice Persona</p>
+                <div className="grid grid-cols-2 gap-2">
+                   {[
+                     { name: 'JARVIS', pitch: 0.8, rate: 0.95 },
+                     { name: 'FRIDAY', pitch: 1.2, rate: 1.1 },
+                     { name: 'BALANCED', pitch: 1.0, rate: 1.0 },
+                     { name: 'CALM', pitch: 0.6, rate: 0.8 }
+                   ].map(v => (
+                     <button 
+                       key={v.name}
+                       onClick={() => updateVoiceSetting(v.name, v.pitch, v.rate)}
+                       className={`px-3 py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${data.voice?.persona === v.name ? 'bg-[var(--accent)] text-black' : 'bg-zinc-800 text-zinc-500'}`}
+                     >
+                       {v.name}
+                     </button>
+                   ))}
+                </div>
+             </div>
           </div>
 
           {/* Device Matrix - SPAN 16 */}
@@ -537,11 +679,23 @@ export default function App() {
 
           {/* Debug Console - SPAN 12 */}
           <div className="grid-col-12 bento-card bg-zinc-900/20 border-dashed border-zinc-800">
-             <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest mb-4 italic">Protocol Overrides</p>
+             <div className="flex justify-between items-center mb-4">
+                <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest italic">Protocol Overrides</p>
+                <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold uppercase ${data?.subscriptionActive ? 'bg-lime-500/20 text-lime-500' : 'bg-red-500/20 text-red-500'}`}>
+                   {data?.subscriptionActive ? 'SaaS Pulse Active' : 'SaaS Pulse Offline'}
+                </div>
+             </div>
              <div className="flex flex-wrap gap-2 text-[10px] font-mono">
                 <button onClick={triggerAnomaly} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-red-500 text-zinc-500 hover:text-red-500 transition-colors">FORCE_ANOMALY</button>
                 <button onClick={startTraining} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-[var(--accent)] text-zinc-500 hover:text-[var(--accent)] transition-colors">TRAIN_VOICE_MODEL</button>
-                <button className="px-3 py-1 border border-zinc-800 rounded-lg text-zinc-500">SIM_POWER_FAILURE</button>
+                <button onClick={checkSoftwareUpdate} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-blue-500 text-zinc-500 hover:text-blue-500 transition-colors">QUERY_SYSTEM_UPDATE</button>
+                <button onClick={simulatePredictive} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-emerald-500 text-zinc-500 hover:text-emerald-500 transition-colors">SIM_PREDICTIVE_MAINT</button>
+                <button onClick={toggleSubscription} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-amber-500 text-zinc-500 hover:text-amber-500 transition-colors">TOGGLE_SAAS_SUBSCRIPTION</button>
+                {data.duressActive && (
+                  <div className="px-3 py-1 bg-red-500/20 text-red-500 border border-red-500 rounded-lg animate-pulse font-black uppercase">
+                    DURESS_PROTOCOL_ACTIVE
+                  </div>
+                )}
              </div>
           </div>
         </div>
@@ -566,6 +720,42 @@ export default function App() {
                  Record Sample
                </button>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      
+      {/* Smart Keypad Overlay */}
+      <AnimatePresence>
+        {showKeypad && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-xl grid place-items-center p-6">
+             <motion.div initial={{ y: 20 }} animate={{ y: 0 }} className="max-w-xs w-full bento-card items-center p-8">
+                <Lock size={32} className="tech-accent mb-6" />
+                <h3 className="text-xl font-black italic uppercase tracking-tighter mb-1">Secure Unlock</h3>
+                <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-widest mb-8 text-center">4-Digit Cryptographic Code Required</p>
+                
+                <div className="flex gap-3 mb-8">
+                  {[1, 2, 3, 4].map(i => (
+                    <div key={i} className={`w-3 h-3 rounded-full border border-zinc-700 ${pinBuffer.length >= i ? 'bg-[var(--accent)] border-[var(--accent)]' : ''}`} />
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 w-full mb-8">
+                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, '*', 0, '#'].map(val => (
+                     <button 
+                       key={val} 
+                       onClick={() => typeof val === 'number' && handleKeypadPress(val.toString())}
+                       className="aspect-square bg-zinc-800 rounded-2xl grid place-items-center font-black text-lg hover:bg-[var(--accent)] hover:text-black transition-all"
+                     >
+                       {val}
+                     </button>
+                   ))}
+                </div>
+
+                <div className="flex gap-4 w-full">
+                  <button onClick={() => { setShowKeypad(false); setPinBuffer(''); }} className="flex-1 py-4 bg-zinc-800 rounded-2xl font-bold uppercase text-[10px] tracking-widest">Cancel</button>
+                  <button onClick={submitPin} disabled={pinBuffer.length < 4} className="flex-1 py-4 bg-[var(--accent)] text-black rounded-2xl font-black uppercase text-[10px] tracking-widest disabled:opacity-30">Authorize</button>
+                </div>
+             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -665,7 +855,9 @@ export default function App() {
               <motion.div key={alert.id} initial={{ scale: 0.9, y: 30 }} animate={{ scale: 1, y: 0 }} className="max-w-lg w-full bento-card border-t-8 border-t-[var(--alert-red)] shadow-2xl shadow-red-500/20 bg-zinc-900">
                 <div className="flex items-start gap-6 mb-8">
                   <div className="p-4 bg-red-500/10 rounded-[2rem] text-red-500 shadow-lg">
-                    {alert.type === 'vendor' ? <RefreshCw size={40} className="animate-spin-slow" /> : <AlertTriangle size={40} />}
+                    {alert.type === 'vendor' ? <RefreshCw size={40} className="animate-spin-slow" /> : 
+                     alert.type === 'system' ? <Download size={40} className="animate-bounce" /> :
+                     <AlertTriangle size={40} />}
                   </div>
                   <div className="flex-1">
                     <h3 className="text-2xl font-black uppercase tracking-tight italic mb-2">{alert.title}</h3>
