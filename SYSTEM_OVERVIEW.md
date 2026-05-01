@@ -47,9 +47,12 @@
 - **Implementation**: Frontend uses Gemini Flash to take user speech/text, while the backend parses intents (multi-intent support) to execute commands like "Turn on lights and lock the door."
 - **Natural Voice**: Uses `gemini-3.1-flash-tts-preview` for human-like auditory feedback, with custom personas like *Onyx* (deep/calm) and *Jarvis* (British/technical).
 
-### 2. Grid Guardian (Energy Management)
-- **Use**: Protects battery life during power outages (Inverter mode).
-- **Implementation**: Automatically detects when the power source switches. When on 'Inverter', it performs **Automatic Load Shedding**, shutting down "Heavy" appliances (ACs, Water Pumps) while keeping "Essential" devices (Lights, Fridge, Security) powered.
+### 2. Grid Guardian: Selective Energy Management
+- **Use**: Protects battery life during power outages while respecting the inverter's actual capacity.
+- **Implementation**: 
+  - **Selective Load Shedding**: Users can mark specific "Heavy" appliances (e.g., a specific high-rated AC) as **"Bypass"**, allowing them to run on the inverter if the hardware is rated for it.
+  - **Autonomous Intervention**: For devices marked as **"Shed"**, the system automatically shuts them down when the power source switches to 'Inverter'.
+  - **Proactive Monitoring**: The Proactive Engine continuously scans for un-authorized heavy loads when on battery and force-shuts them down to prevent inverter trip-outs.
 
 ### 3. Duress Protocol (Silent Security)
 - **Use**: Protects residents during forced entries.

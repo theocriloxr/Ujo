@@ -36,8 +36,9 @@ interface Device {
   type: string;
   state: string;
   status: string;
-  power_usage: number;
-  load_type: 'Essential' | 'Heavy';
+  category: string;
+  isSheddable: boolean;
+  powerUsage: number;
 }
 
 interface EnergyData {
@@ -55,7 +56,7 @@ interface Alert {
   message: string;
   severity: string;
   timestamp: string;
-  type: 'anomaly' | 'vendor' | 'energy' | 'health';
+  type: 'anomaly' | 'vendor' | 'energy' | 'health' | 'system' | 'security';
 }
 
 interface SystemData {
@@ -64,8 +65,9 @@ interface SystemData {
   location: string;
   updateAvailable: boolean;
   subscriptionActive: boolean;
-  powerSource: 'Grid' | 'Inverter' | 'Generator';
+  powerSource: 'MAINS' | 'INVERTER' | 'GENERATOR';
   duressActive: boolean;
+  assistantName: string;
   voice: {
     persona: string;
     pitch: number;
@@ -114,12 +116,29 @@ const DeviceCard = ({ device, onToggle }: DeviceCardProps) => {
         <div className="p-3 bg-zinc-800/80 rounded-2xl group-hover:bg-[var(--accent-muted)] transition-colors">
           {getIcon()}
         </div>
-        <div className={`indicator ${device.status === 'online' ? 'active' : ''}`} />
+        <div className="flex flex-col items-end gap-2">
+          <div className={`indicator ${device.status === 'ONLINE' ? 'active' : ''}`} />
+          {device.category === 'HEAVY' && (
+            <button
+              id={`shed-${device.id}`}
+              onClick={async (e) => {
+                e.stopPropagation();
+                try {
+                  await fetch(`/api/devices/${device.id}/toggle-sheddable`, { method: 'POST' });
+                } catch (err) { console.error(err); }
+              }}
+              title={device.isSheddable ? "Load shedding enabled" : "Always allowed on Inverter"}
+              className={`px-1.5 py-0.5 rounded text-[8px] uppercase font-bold tracking-tighter transition-all ${device.isSheddable ? 'bg-red-900/40 text-red-400 border border-red-800/50' : 'bg-green-900/40 text-green-400 border border-green-800/50'}`}
+            >
+              {device.isSheddable ? 'Shed' : 'Bypass'}
+            </button>
+          )}
+        </div>
       </div>
       <div>
         <h3 className="font-semibold text-sm text-zinc-100">{device.name}</h3>
         <p className="text-[10px] font-mono tech-text-dim uppercase tracking-wider mt-1">
-          {device.state} {device.power_usage > 0 ? `• ${device.power_usage}W` : ''}
+          {device.state} {device.powerUsage > 0 ? `• ${device.powerUsage}W` : ''}
         </p>
       </div>
     </motion.div>

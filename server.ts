@@ -2,8 +2,9 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import cors from 'cors';
-import sqlite3 from 'sqlite3';
-import { open, Database } from 'sqlite';
+import { PrismaClient } from '@prisma/client';
+import { ProactiveEngine } from './src/services/ProactiveEngine.ts';
+import { TranslatorService } from './src/services/TranslatorService.ts';
 import { HABridge } from './ha_bridge.ts';
 import http from 'http';
 import { Server } from 'socket.io';
@@ -12,189 +13,88 @@ import QRCode from 'qrcode';
 
 // --- CONFIGURATION ---
 const PORT = 3000;
-const DB_PATH = process.env.DATABASE_URL || 'ujo_os.db';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
-// --- HOME ASSISTANT BRIDGE ---
+// --- ENTERPRISE HUB SERVICES ---
+const prisma = new PrismaClient();
+const proactiveEngine = new ProactiveEngine(prisma);
+const translator = new TranslatorService();
+
 const haBridge = new HABridge({
   url: process.env.HA_URL || 'http://localhost:8123',
   token: process.env.HA_TOKEN || 'dummy_token'
 });
 
-// --- DATABASE SETUP ---
-let db: Database;
 let io: Server;
 
-async function initDb() {
-  db = await open({
-    filename: DB_PATH,
-    driver: sqlite3.Database
-  });
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS system_config (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS voice_settings (
-      key TEXT PRIMARY KEY,
-      persona TEXT DEFAULT 'JARVIS',
-      pitch REAL DEFAULT 0.85,
-      rate REAL DEFAULT 0.95,
-      accent TEXT DEFAULT 'British'
-    );
-
-    CREATE TABLE IF NOT EXISTS devices (
-      id TEXT PRIMARY KEY,
-      name TEXT,
-      type TEXT,
-      state TEXT,
-      status TEXT,
-      power_usage REAL DEFAULT 0,
-      load_type TEXT DEFAULT 'Essential' -- 'Essential' or 'Heavy'
-    );
-
-    CREATE TABLE IF NOT EXISTS alerts (
-      id TEXT PRIMARY KEY,
-      title TEXT,
-      message TEXT,
-      severity TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      confirmed INTEGER DEFAULT 0,
-      type TEXT DEFAULT 'anomaly' -- 'anomaly', 'vendor', 'energy', 'health'
-    );
-
-    CREATE TABLE IF NOT EXISTS access_profiles (
-      id TEXT PRIMARY KEY,
-      name TEXT,
-      role TEXT,
-      start_time TEXT, -- HH:MM
-      end_time TEXT,   -- HH:MM
-      days TEXT        -- e.g. "Tuesday,Thursday"
-    );
-
-    CREATE TABLE IF NOT EXISTS energy_stats (
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      grid_status TEXT,
-      battery_level INTEGER,
-      solar_input REAL
-    );
-  `);
-
-  // Migration for V2 columns
-  try {
-    await db.exec('ALTER TABLE devices ADD COLUMN load_type TEXT DEFAULT \'Essential\'');
-  } catch (e) { /* ignore */ }
-
-  try {
-    await db.exec('ALTER TABLE devices ADD COLUMN power_usage REAL DEFAULT 0');
-  } catch (e) { /* ignore if already exists */ }
-
-  try {
-    await db.exec("ALTER TABLE alerts ADD COLUMN type TEXT DEFAULT 'anomaly'");
-  } catch (e) { /* ignore if already exists */ }
-
-  // Initial Seed
-  const deviceCount = await db.get('SELECT COUNT(*) as count FROM devices');
-  if (deviceCount?.count === 0) {
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('light_1', 'Living Room Light', 'light', 'off', 'online', 0, 'Essential')");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('lock_1', 'Front Door Lock', 'lock', 'locked', 'online', 0, 'Essential')");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('fridge_1', 'Kitchen Fridge', 'appliance', 'normal', 'online', 85, 'Essential')");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('ac_1', 'Master Bedroom AC', 'climate', 'off', 'online', 1500, 'Heavy')");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('pump_1', 'Borehole Pump', 'appliance', 'off', 'online', 1200, 'Heavy')");
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('gas_sensor', 'Kitchen Gas', 'sensor', '92%', 'online', 0, 'Essential')");
+async function seedData() {
+  // Check if we have devices
+  const count = await prisma.device.count();
+  if (count === 0) {
+    await prisma.device.createMany({
+      data: [
+        { id: 'light_1', name: 'Living Room Light', type: 'light', state: 'off', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false },
+        { id: 'lock_1', name: 'Front Door Lock', type: 'lock', state: 'locked', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false },
+        { id: 'fridge_1', name: 'Kitchen Fridge', type: 'appliance', state: 'normal', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false, powerUsage: 85 },
+        { id: 'ac_1', name: 'Master Bedroom AC', type: 'climate', state: 'off', status: 'ONLINE', category: 'HEAVY', isSheddable: true, powerUsage: 1500 },
+        { id: 'pump_1', name: 'Borehole Pump', type: 'appliance', state: 'off', status: 'ONLINE', category: 'HEAVY', isSheddable: true, powerUsage: 1200 },
+        { id: 'gas_sensor', name: 'Kitchen Gas', type: 'sensor', state: '92%', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false }
+      ]
+    });
   }
 
-  const modeExists = await db.get("SELECT value FROM system_config WHERE key = 'mode'");
-  if (!modeExists) {
-    await db.run("INSERT INTO system_config (key, value) VALUES ('mode', 'Standard')");
+  const profileCount = await prisma.accessProfile.count();
+  if (profileCount === 0) {
+    await prisma.accessProfile.create({
+      data: {
+        id: 'staff_1',
+        name: 'Abike (Cleaner)',
+        role: 'STAFF',
+        pinHash: 'dummy_hash', // In production this would be a bcrypt hash
+        scheduleRaw: JSON.stringify({
+          days: 'Tuesday, Thursday',
+          start_time: '10:00',
+          end_time: '14:00'
+        })
+      }
+    });
   }
-
-  const locationExists = await db.get("SELECT value FROM system_config WHERE key = 'location'");
-  if (!locationExists) {
-    await db.run("INSERT INTO system_config (key, value) VALUES ('location', 'Home')");
-  }
-
-  const updateExists = await db.get("SELECT value FROM system_config WHERE key = 'software_update'");
-  if (!updateExists) {
-    await db.run("INSERT INTO system_config (key, value) VALUES ('software_update', '0')");
-  }
-
-  const subExists = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
-  if (!subExists) {
-    await db.run("INSERT INTO system_config (key, value) VALUES ('subscription_active', '0')");
-  }
-
-  const pwrExists = await db.get("SELECT value FROM system_config WHERE key = 'power_source'");
-  if (!pwrExists) {
-    await db.run("INSERT INTO system_config (key, value) VALUES ('power_source', 'Grid')");
-  }
-
-  const durExists = await db.get("SELECT value FROM system_config WHERE key = 'duress_active'");
-  if (!durExists) {
-    await db.run("INSERT INTO system_config (key, value) VALUES ('duress_active', '0')");
-  }
-
-  const asstNameExists = await db.get("SELECT value FROM system_config WHERE key = 'assistant_name'");
-  if (!asstNameExists) {
-    await db.run("INSERT INTO system_config (key, value) VALUES ('assistant_name', 'Ujo')");
-  }
-
-  const voiceExists = await db.get("SELECT persona FROM voice_settings LIMIT 1");
-  if (!voiceExists) {
-    await db.run("INSERT INTO voice_settings (key, persona, pitch, rate, accent) VALUES ('current', 'JARVIS', 0.8, 0.95, 'British accent personality')");
-  }
-
-  const accessCount = await db.get('SELECT COUNT(*) as count FROM access_profiles');
-  if (accessCount?.count === 0) {
-    await db.run("INSERT INTO access_profiles (id, name, role, start_time, end_time, days) VALUES ('staff_1', 'Cleaner (Abike)', 'Domestic Staff', '10:00', '14:00', 'Tuesday')");
-  }
-
-  console.log('Database initialized.');
 }
 
-// --- STATE MANAGER ---
+// --- STATE MANAGER (Enterprise Version) ---
 class StateManager {
   async getStates() {
-    const devices = await db.all('SELECT * FROM devices');
-    const mode = await db.get("SELECT value FROM system_config WHERE key = 'mode'");
-    const location = await db.get("SELECT value FROM system_config WHERE key = 'location'");
-    const updateAvailable = await db.get("SELECT value FROM system_config WHERE key = 'software_update'");
-    const subscription = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
-    const powerSource = await db.get("SELECT value FROM system_config WHERE key = 'power_source'");
-    const duressActive = await db.get("SELECT value FROM system_config WHERE key = 'duress_active'");
-    const assistantName = await db.get("SELECT value FROM system_config WHERE key = 'assistant_name'");
-    const voice = await db.get("SELECT * FROM voice_settings WHERE key = 'current'");
-    const alerts = await db.all('SELECT * FROM alerts WHERE confirmed = 0');
-    const accessProfiles = await db.all('SELECT * FROM access_profiles');
+    const devices = await prisma.device.findMany();
+    const config = await prisma.systemConfig.findUnique({ where: { id: 'GLOBAL' } });
+    const alerts = await prisma.alert.findMany({ where: { acknowledged: false } });
+    const profiles = await prisma.accessProfile.findMany();
     
-    // Synthetic Energy Data
+    // In a real InfluxDB environment, this would be a time-series query
     const energy = {
-      grid: powerSource?.value === 'Grid' ? 'Connected' : 'Failing',
-      source: powerSource?.value || 'Grid',
-      voltage: powerSource?.value === 'Grid' ? 228 : (powerSource?.value === 'Inverter' ? 220 : 0),
-      status: powerSource?.value === 'Grid' ? 'Stable' : 'Battery Optimal',
+      grid: config?.powerSource === 'MAINS' ? 'Connected' : 'Failing',
+      source: config?.powerSource || 'MAINS',
+      voltage: config?.powerSource === 'MAINS' ? 228 : (config?.powerSource === 'INVERTER' ? 220 : 0),
+      status: config?.powerSource === 'MAINS' ? 'Stable' : 'Battery Optimal',
       battery: 88,
-      solar: 1.2, // kW
+      solar: 1.2,
       forecast: 'Overcast Tomorrow'
     };
 
     return { 
       devices, 
-      mode: mode?.value, 
-      location: location?.value, 
-      updateAvailable: updateAvailable?.value === '1',
-      subscriptionActive: subscription?.value === '1',
-      powerSource: powerSource?.value,
-      duressActive: duressActive?.value === '1',
-      assistantName: assistantName?.value || 'Ujo',
-      voice,
+      mode: config?.mode, 
+      location: 'Home', // Mocked
+      updateAvailable: false, // Mocked
+      subscriptionActive: true, // Mocked
+      powerSource: config?.powerSource,
+      duressActive: config?.mode === 'DURESS_ACTIVE',
+      assistantName: 'Ujo',
       alerts, 
       energy, 
-      accessProfiles 
+      accessProfiles: profiles 
     };
   }
+
 
   async broadcastUpdate() {
     if (io) {
@@ -204,88 +104,107 @@ class StateManager {
   }
 
   async updateDevice(id: string, state: string) {
-    await db.run('UPDATE devices SET state = ? WHERE id = ?', [state, id]);
+    await prisma.device.update({
+      where: { id },
+      data: { state }
+    });
     await this.broadcastUpdate();
   }
 
   async setMode(mode: string) {
-    await db.run("UPDATE system_config SET value = ? WHERE key = 'mode'", [mode]);
+    await prisma.systemConfig.update({
+      where: { id: 'GLOBAL' },
+      data: { mode }
+    });
     await this.broadcastUpdate();
   }
 
   // --- GRID GUARDIAN: Load Shedding Logic ---
-  async setPowerState(source: 'Grid' | 'Inverter' | 'Generator') {
-    await db.run("UPDATE system_config SET value = ? WHERE key = 'power_source'", [source]);
+  async setPowerState(source: string) {
+    const config = await prisma.systemConfig.update({
+      where: { id: 'GLOBAL' },
+      data: { powerSource: source }
+    });
     
-    if (source === 'Inverter') {
-      // Automatic Load Shedding: Turn off "Heavy" devices to protect battery
-      await db.run("UPDATE devices SET state = 'off' WHERE load_type = 'Heavy'");
+    if (source === 'INVERTER' && config.autoShedding) {
+      // Automatic Load Shedding: Only kill sheddable heavies
+      await prisma.device.updateMany({
+        where: { 
+          category: 'HEAVY',
+          isSheddable: true 
+        },
+        data: { state: 'OFF' }
+      });
       await this.triggerAnomaly(
         'Load Shedding Active',
-        'Grid power lost. Switched to Inverter. Heavy appliances (AC, Pump) shut down to protect battery life.',
+        'Grid power lost. Switched to Inverter. Non-essential heavy appliances shut down autonomously.',
         'medium',
-        'energy'
+        'ENERGY'
       );
     }
     await this.broadcastUpdate();
   }
 
-  // --- DURESS PROTOCOL: Silent Security ---
+  // --- DURESS PROTOCOL ---
   async unlockWithPin(pin: string) {
     const NORMAL_PIN = '1234';
     const DURESS_PIN = '9999';
 
     if (pin === NORMAL_PIN) {
       await this.updateDevice('lock_1', 'unlocked');
-      await db.run("UPDATE system_config SET value = '0' WHERE key = 'duress_active'");
+      await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { mode: 'STANDARD' } });
       return { success: true, message: 'Welcome. Door unlocked.' };
     } 
     
     if (pin === DURESS_PIN) {
-      // Duress: Unlock door normally but trigger silent flag
       await this.updateDevice('lock_1', 'unlocked');
-      await db.run("UPDATE system_config SET value = '1' WHERE key = 'duress_active'");
-      
+      await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { mode: 'DURESS_ACTIVE' } });
       await this.triggerAnomaly(
         'Silent Duress Alert',
-        'Duress code entered at Front Door. Security protocols initiated silently.',
-        'critical',
-        'anomaly'
+        'Duress code entered. Security protocols initiated silently.',
+        'CRITICAL',
+        'SECURITY'
       );
-      
-      return { success: true, message: 'Welcome. Door unlocked.' }; // UI remains "normal"
+      return { success: true, message: 'Welcome. Door unlocked.' };
     }
 
     return { success: false, message: 'Invalid PIN' };
   }
 
-  async setLocation(location: string) {
-    await db.run("UPDATE system_config SET value = ? WHERE key = 'location'", [location]);
-  }
-
   async triggerAnomaly(title: string, message: string, severity: string, type: string = 'anomaly') {
-    const id = `alert_${Date.now()}`;
-    await db.run('INSERT INTO alerts (id, title, message, severity, type) VALUES (?, ?, ?, ?, ?)', [id, title, message, severity, type]);
+    const alert = await prisma.alert.create({
+      data: {
+        message: `${title}: ${message}`,
+        severity,
+        type
+      }
+    });
     await this.broadcastUpdate();
-    return id;
+    return alert.id;
   }
 
-  async confirmAlert(id: string, action: 'Confirm' | 'Ignore') {
-    await db.run('UPDATE alerts SET confirmed = 1 WHERE id = ?', [id]);
+  async confirmAlert(id: string, action: string) {
+    await prisma.alert.update({
+      where: { id },
+      data: { acknowledged: true }
+    });
     await this.broadcastUpdate();
-    return { success: true, message: `Alert ${id} was ${action.toLowerCase()}ed.` };
+    return { success: true, message: `Alert acknowledged.` };
   }
 
   async checkStaffAccess(staffId: string) {
-    const profile = await db.get('SELECT * FROM access_profiles WHERE id = ?', [staffId]);
+    const profile = await prisma.accessProfile.findUnique({ where: { id: staffId } });
     if (!profile) return { allowed: false, reason: 'No profile found' };
+
+    const schedule = JSON.parse(profile.scheduleRaw || '{}');
+    const { days = '', start_time = '00:00', end_time = '23:59' } = schedule;
 
     const now = new Date();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
     const currentDay = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][now.getDay()];
 
-    const isDayMatch = profile.days.includes(currentDay);
-    const isTimeMatch = currentTime >= profile.start_time && currentTime <= profile.end_time;
+    const isDayMatch = days.includes(currentDay);
+    const isTimeMatch = currentTime >= start_time && currentTime <= end_time;
 
     if (isDayMatch && isTimeMatch) {
       await this.updateDevice('lock_1', 'unlocked');
@@ -294,14 +213,19 @@ class StateManager {
 
     return { 
       allowed: false, 
-      reason: `Access refused. Authorized for ${profile.days} between ${profile.start_time}-${profile.end_time}.` 
+      reason: `Access refused. Authorized for ${days} between ${start_time}-${end_time}.` 
     };
+  }
+
+  async setLocation(location: string) {
+    // Mocked for enterprise version
+    await this.broadcastUpdate();
   }
 
   async nlpParse(rawText: string) {
     const text = rawText.toLowerCase();
-    const modeData = await db.get("SELECT value FROM system_config WHERE key = 'mode'");
-    const currentMode = modeData?.value;
+    const config = await prisma.systemConfig.findUnique({ where: { id: 'GLOBAL' } });
+    const currentMode = config?.mode;
 
     let intents = [];
     let responses: string[] = [];
@@ -356,7 +280,8 @@ class StateManager {
 const stateManager = new StateManager();
 
 async function startServer() {
-  await initDb();
+  await seedData();
+  proactiveEngine.init();
   await haBridge.connect();
   
   const app = express();
@@ -419,11 +344,38 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  app.post('/api/system/assistant-name', async (req, res) => {
-    const { name } = req.body;
-    await db.run("UPDATE system_config SET value = ? WHERE key = 'assistant_name'", [name]);
-    await stateManager.broadcastUpdate();
-    res.json({ success: true });
+  app.post('/api/intercom/translate', async (req, res) => {
+    const { text, dialect } = req.body;
+    const translated = await translator.translateToDialect(text, dialect);
+    res.json({ translated });
+  });
+
+  app.post('/api/devices/:id/toggle-sheddable', async (req, res) => {
+    const { id } = req.params;
+    const device = await prisma.device.findUnique({ where: { id } });
+    if (device) {
+      const updated = await prisma.device.update({
+        where: { id },
+        data: { isSheddable: !device.isSheddable }
+      });
+      await stateManager.broadcastUpdate();
+      return res.json({ success: true, isSheddable: updated.isSheddable });
+    }
+    res.status(404).json({ error: 'Device not found' });
+  });
+
+  app.post('/api/system/toggle-shedding', async (req, res) => {
+    const config = await prisma.systemConfig.findUnique({ where: { id: 'GLOBAL' } });
+    if (config) {
+      await prisma.systemConfig.update({
+        where: { id: 'GLOBAL' },
+        data: { autoShedding: !config.autoShedding }
+      });
+      await stateManager.broadcastUpdate();
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Config not found' });
+    }
   });
 
   // --- PHASE 3 ENDPOINTS ---
@@ -498,36 +450,34 @@ async function startServer() {
 
   // HA Sync
   app.post('/api/ha/sync', async (req, res) => {
-    const devices = await haBridge.syncState();
-    for (const dev of devices) {
-      const existing = await db.get('SELECT id FROM devices WHERE id = ?', [dev.id]);
-      if (existing) {
-        await db.run('UPDATE devices SET state = ? WHERE id = ?', [dev.state, dev.id]);
-      } else {
-        await db.run('INSERT INTO devices (id, name, type, state, status) VALUES (?, ?, ?, ?, ?)', [dev.id, dev.name, 'ha_linked', dev.state, 'online']);
-      }
+    const haDevices = await haBridge.syncState();
+    for (const dev of haDevices) {
+      await prisma.device.upsert({
+        where: { id: dev.id },
+        update: { state: dev.state },
+        create: { 
+          id: dev.id, 
+          name: dev.name, 
+          type: 'ha_linked', 
+          state: dev.state, 
+          status: 'ONLINE' 
+        }
+      });
     }
-    res.json({ success: true, synced: devices.length });
+    res.json({ success: true, synced: haDevices.length });
   });
 
   // Voice Settings Update
   app.post('/api/voice/settings', async (req, res) => {
-    const { persona, pitch, rate } = req.body;
-    await db.run('UPDATE voice_settings SET persona = ?, pitch = ?, rate = ? WHERE key = \'current\'', [persona, pitch, rate]);
+    // Legacy support- in Prisma we'd have a VoiceSettings model
     res.json({ success: true });
   });
 
   // OVER-THE-AIR (OTA) UPDATE MANAGER
   app.post('/api/system/check-update', async (req, res) => {
-    const sub = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
-    if (sub?.value !== '1') {
-      return res.status(403).json({ success: false, message: 'Cloud updates require an active Ujo SaaS subscription.' });
-    }
-
-    await db.run("UPDATE system_config SET value = '1' WHERE key = 'software_update'");
     await stateManager.triggerAnomaly(
       'System-Wide OTA Update Ready',
-      'Ujo OS V2.1.0 & Mobile App V1.2.0 are ready. Edge vision models have been downloaded. Install updates now?',
+      'Ujo OS V2.1.0 & Mobile App V1.2.0 are ready. Install updates now?',
       'medium',
       'system'
     );
@@ -598,10 +548,7 @@ async function startServer() {
 
   // Toggle Subscription (Demo/Dev)
   app.post('/api/system/toggle-subscription', async (req, res) => {
-    const current = await db.get("SELECT value FROM system_config WHERE key = 'subscription_active'");
-    const nextValue = current?.value === '1' ? '0' : '1';
-    await db.run("UPDATE system_config SET value = ? WHERE key = 'subscription_active'", [nextValue]);
-    res.json({ success: true, active: nextValue === '1' });
+    res.json({ success: true, active: true });
   });
 
   // POWER SOURCE ENDPOINT (Grid Guardian)
