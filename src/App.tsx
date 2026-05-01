@@ -158,7 +158,7 @@ export default function App() {
       
       const ttsResp = await ai.models.generateContent({
          model: "gemini-3.1-flash-tts-preview",
-         contents: text,
+         contents: [{ parts: [{ text: text }] }],
          config: {
            responseModalities: [Modality.AUDIO],
            speechConfig: {
@@ -174,14 +174,22 @@ export default function App() {
          for (let i = 0; i < binaryString.length; i++) {
              bytes[i] = binaryString.charCodeAt(i);
          }
-         const audioBlob = new Blob([bytes.buffer], { type: 'audio/wav' });
-         const url = URL.createObjectURL(audioBlob);
-         const audio = new Audio(url);
          
-         // Slightly boost playback speed dynamically
-         audio.playbackRate = data?.voice?.rate || 1.05; 
+         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+         const audioBuffer = audioContext.createBuffer(1, bytes.length / 2, 24000);
+         const channelData = audioBuffer.getChannelData(0);
+         const dataView = new DataView(bytes.buffer);
          
-         await audio.play();
+         for (let i = 0; i < bytes.length / 2; i++) {
+           channelData[i] = dataView.getInt16(i * 2, true) / 32768.0;
+         }
+         
+         const source = audioContext.createBufferSource();
+         source.buffer = audioBuffer;
+         source.playbackRate.value = data?.voice?.rate || 1.05;
+         source.connect(audioContext.destination);
+         source.start();
+         
          return;
       }
     } catch (e) {
