@@ -12,7 +12,7 @@ import jwt from 'jsonwebtoken';
 import QRCode from 'qrcode';
 
 // --- CONFIGURATION ---
-const PORT = 3000;
+const PORT = 3010;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
 
 // --- ENTERPRISE HUB SERVICES ---
@@ -20,10 +20,14 @@ const prisma = new PrismaClient();
 const proactiveEngine = new ProactiveEngine(prisma);
 const translator = new TranslatorService();
 
+import { UjoDecisionEngine } from './DecisionEngine';
+
 const haBridge = new HABridge({
   url: process.env.HA_URL || 'http://localhost:8123',
   token: process.env.HA_TOKEN || 'dummy_token'
 });
+
+const brain = new UjoDecisionEngine();
 
 let io: Server;
 
@@ -298,16 +302,44 @@ async function startServer() {
 
   // --- API ENDPOINTS ---
 
-  // Fetch all states
+// Fetch all states + trust log
   app.get('/api/states', async (req, res) => {
     console.log('GET /api/states hit');
     try {
       const data = await stateManager.getStates();
+data.trustLog = brain.actionHistory.slice(0, 10);
+      data.houseScore = 92; // Sim from IntelligenceEngine
       res.json(data);
     } catch (error) {
       console.error('States fetch error:', error);
       res.status(500).json({ error: 'Failed to fetch states' });
     }
+  });
+
+  // Sensor update / Brain trigger
+  app.post('/api/sensor-update', async (req, res) => {
+    const incomingData = req.body; 
+    
+    // Build context
+    const context = {
+      powerSource: incomingData.source || 'Grid',
+      heavyLoadsActive: incomingData.heavyLoads || 0,
+      fridgeEthyleneLevel: incomingData.ethylene || 20,
+      fridgeTemperature: incomingData.fridgeTemp || 5,
+      pumpActive: incomingData.pump || false,
+      waterFlowRate: incomingData.flow || 0,
+      pumpRunTimeMins: incomingData.pumpTime || 0
+    };
+
+    // Run Brain
+    const actions = brain.evaluateContext(context);
+
+    res.json({ success: true, actionsTriggered: actions });
+  });
+
+  // Trust Log
+  app.get('/api/trust-log', (req, res) => {
+    res.json(brain.actionHistory);
   });
 
   // Mode Switcher

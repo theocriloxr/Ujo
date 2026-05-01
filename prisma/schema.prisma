@@ -18,10 +18,12 @@ model Device {
   type         String   // light, lock, ac, pump, sensor
   state        String   // ON, OFF, LOCKED, UNLOCKED, or raw values
   category     String   @default("ESSENTIAL") // ESSENTIAL vs HEAVY
+  trustZone    TrustZone @default(COMFORT)
   isSheddable  Boolean  @default(true) // If true, system can auto-kill it to save battery
   powerUsage   Float    @default(0.0) // Watts
   lastActionAt DateTime @updatedAt
   status       String   @default("ONLINE")
+  healthTrends HealthTrend[]
 }
 
 model SystemConfig {
@@ -60,10 +62,62 @@ model EnergyTelemetry {
   source    String   // MAINS or INVERTER
 }
 
+enum TrustZone {
+  CRITICAL
+  COMFORT
+  ADVISORY
+}
+
 model AuditLog {
   id        String   @id @default(uuid())
   action    String
   actor     String
+  trustLevel TrustZone?
+  deviceZone TrustZone?
   timestamp DateTime @default(now())
   meta      String?  // Extra JSON data
 }
+
+model Resident {
+  id String @id @default(uuid())
+  homeId String
+  name String
+  role String // OWNER COADMIN STAFF GUEST
+  voiceHash String?
+  zones Json // ["CRITICAL", "COMFORT"]
+  createdAt DateTime @default(now())
+  
+  inventoryItems InventoryItem[]
+  conversationMemories ConversationMemory[]
+}
+
+model InventoryItem {
+  id String @id @default(uuid())
+  name String
+  category String // DAIRY VEGETABLE MEAT etc
+  lowThreshold Float @default(0.2)
+  lastSeen DateTime?
+  confidence Float @default(0.0)
+  residentId String?
+  resident Resident? @relation(fields: [residentId], references: [id])
+}
+
+model HealthTrend {
+  id String @id @default(uuid())
+  deviceId String
+  metric String // power runtime temp
+  trend Float
+  confidence Float
+  anomaly Boolean @default(false)
+  device Device @relation(fields: [deviceId], references: [id])
+}
+
+model ConversationMemory {
+  id String @id @default(uuid())
+  residentId String
+  context Json // {"lastTopic": "lights", "followup": true}
+  timestamp DateTime @default(now())
+  resident Resident @relation(fields: [residentId], references: [id])
+}
+
+

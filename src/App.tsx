@@ -20,8 +20,13 @@ import {
   Link,
   RefreshCw,
   Download,
-  Scan
+  Scan,
+  ShieldAlert,
+  Info,
+  CheckCircle2
 } from 'lucide-react';
+
+import TrustControlPanel from './components/TrustControlPanel';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { io } from 'socket.io-client';
@@ -837,16 +842,17 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
              </button>
           </div>
         </div>
-        {/* Analytics Card */}
-        <div className="bento-card">
-           <div className="flex justify-between items-center mb-4">
-               <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest">Load Shedding Impact</p>
-           </div>
-           <div>
-               <span className="block text-2xl font-black italic tech-accent">142 kWh</span>
-               <span className="text-[8px] font-mono uppercase text-zinc-500">Saved this month via Grid Guardian</span>
-           </div>
-        </div>
+
+          {/* House Health Score */}
+          <div className="bento-card">
+            <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest mb-4">House Health Score</p>
+            <div className="text-center">
+              <span className={`block text-4xl font-black italic ${data.houseScore! > 80 ? 'text-lime-400' : data.houseScore! > 60 ? 'text-yellow-400' : 'text-red-400'}`}>{data.houseScore || 92}</span>
+              <span className="text-[10px] uppercase tracking-wider font-mono text-zinc-500">Overall System Integrity</span>
+            </div>
+          </div>
+
+          <TrustControlPanel logs={data.trustLog || []} />
       </aside>
 
       {/* Main Grid View */}
