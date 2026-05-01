@@ -1,0 +1,69 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./ujo_os.db"
+}
+
+// Enterprise-Grade Smart Home Hub Schema
+
+model Device {
+  id           String   @id @default(uuid())
+  name         String
+  type         String   // light, lock, ac, pump, sensor
+  state        String   // ON, OFF, LOCKED, UNLOCKED, or raw values
+  category     String   @default("ESSENTIAL") // ESSENTIAL vs HEAVY
+  isSheddable  Boolean  @default(true) // If true, system can auto-kill it to save battery
+  powerUsage   Float    @default(0.0) // Watts
+  lastActionAt DateTime @updatedAt
+  status       String   @default("ONLINE")
+}
+
+model SystemConfig {
+  id           String @id @default("GLOBAL")
+  mode         String @default("STANDARD") // STANDARD, AWAY, DURESS_ACTIVE
+  powerSource  String @default("MAINS")    // MAINS, INVERTER
+  autoShedding Boolean @default(true)
+  version      String @default("3.1.0-alpha")
+}
+
+model Alert {
+  id             String   @id @default(uuid())
+  type           String   // SECURITY, ENERGY, SYSTEM
+  severity       String   // HIGH, MEDIUM, LOW, CRITICAL
+  message        String
+  acknowledged   Boolean  @default(false)
+  timestamp      DateTime @default(now())
+}
+
+model AccessProfile {
+  id           String   @id @default(uuid())
+  name         String
+  pinHash      String
+  role         String   @default("GUEST") // OWNER, STAFF, GUEST
+  scheduleRaw  String?  // JSON string for allowed windows
+  isTemporal   Boolean  @default(false)
+  expiresAt    DateTime?
+}
+
+model EnergyTelemetry {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  voltage   Float
+  current   Float
+  frequency Float
+  source    String   // MAINS or INVERTER
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  actor     String
+  timestamp DateTime @default(now())
+  meta      String?  // Extra JSON data
+}
