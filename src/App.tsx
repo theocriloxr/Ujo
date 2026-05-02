@@ -20,7 +20,16 @@ import {
   Link,
   RefreshCw,
   Download,
-  Scan
+  Scan,
+  Smartphone,
+  Battery,
+  QrCode,
+  Check,
+  ShieldAlert,
+  Sparkles,
+  Search,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
@@ -93,20 +102,51 @@ interface HAStatus {
 // --- HUD COMPONENTS ---
 
 const AIOrb = ({ active }: { active: boolean }) => (
-  <div className="relative w-32 h-32 flex items-center justify-center">
-    <div className={`absolute inset-0 rounded-full bg-[var(--accent-gold)] opacity-10 blur-2xl transition-all duration-1000 ${active ? 'scale-150 opacity-20' : 'scale-100'}`} />
+  <div className="relative w-12 h-12 flex items-center justify-center">
+    {/* Inner Intensity Glow */}
     <motion.div 
       animate={{ 
-        scale: active ? [1, 1.1, 1] : 1,
-        boxShadow: active 
-          ? ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.5)", "0 0 20px rgba(250,204,21,0.2)"]
-          : "0 0 20px rgba(250,204,21,0.1)"
+        scale: active ? [0.8, 1.2, 0.8] : [0.9, 1.1, 0.9],
+        opacity: active ? [0.2, 0.4, 0.2] : [0.05, 0.1, 0.05]
       }}
       transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-      className="w-16 h-16 rounded-full bg-gradient-to-tr from-yellow-600 to-yellow-200 border border-white/20 relative z-10 animate-orb"
+      className="absolute inset-0 rounded-full bg-[var(--accent-gold)] blur-xl"
+    />
+    
+    {/* Main Orb Sphere */}
+    <motion.div 
+      animate={{ 
+        boxShadow: active ? [
+          '0 0 20px rgba(250,204,21,0.2)',
+          '0 0 40px rgba(250,204,21,0.5)',
+          '0 0 20px rgba(250,204,21,0.2)'
+        ] : '0 0 10px rgba(250,204,21,0.1)'
+      }}
+      transition={{ duration: 2, repeat: Infinity }}
+      className={`w-10 h-10 rounded-full relative z-10 border-t-2 border-white/20 shadow-2xl transition-all duration-1000 ${
+        active 
+          ? 'bg-gradient-to-tr from-yellow-700 via-[var(--accent-gold)] to-yellow-100 scale-110' 
+          : 'bg-zinc-800 border-zinc-700/50 grayscale opacity-40'
+      }`}
     >
-      <div className="absolute inset-2 rounded-full bg-black/40 backdrop-blur-sm shadow-inner" />
+       <div className="absolute inset-1 rounded-full bg-black/20 backdrop-blur-[2px] overflow-hidden">
+          <motion.div 
+            animate={{ rotate: 360, opacity: active ? [0.1, 0.3, 0.1] : 0 }}
+            transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
+            className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.4),transparent_60%)]"
+          />
+       </div>
     </motion.div>
+
+    {/* Satellite Rings */}
+    {active && (
+      <motion.div 
+        initial={{ rotate: 0, scale: 0.8, opacity: 0 }}
+        animate={{ rotate: 360, scale: 1.4, opacity: 0.2 }}
+        transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+        className="absolute inset-0 rounded-full border border-[var(--accent-gold)] border-dashed"
+      />
+    )}
   </div>
 );
 
@@ -132,30 +172,152 @@ const DigitalTwinMockup = () => (
   </div>
 );
 
-const TelemetryStrip = ({ data }: { data: any[] }) => (
-  <div className="glass-hud p-6 h-32 flex flex-col justify-between">
-    <div className="flex justify-between items-center mb-2">
-      <span className="mono-data text-[10px] text-zinc-400">Live Power Consumption Grid</span>
-      <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">228.4V NOMINAL</span>
+const TelemetryStrip = ({ history }: { history: any[] }) => {
+  const [mouseX, setMouseX] = useState(0);
+  const [mouseY, setMouseY] = useState(0);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMouseX(((e.clientX - rect.left) / rect.width - 0.5) * 2);
+    setMouseY(((e.clientY - rect.top) / rect.height - 0.5) * 2);
+  };
+
+  const chartsData = history.slice(-30).map(d => ({
+    ...d,
+    power: Math.max(10, (d.voltage || 220) * 0.5 + Math.random() * 20),
+    battery: Math.max(20, 85 + Math.sin(Date.now() / 5000) * 5)
+  }));
+
+  const currentData = chartsData[chartsData.length - 1] || { voltage: 0, power: 0, battery: 0 };
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4" onMouseMove={handleMouseMove} onMouseLeave={() => { setMouseX(0); setMouseY(0); }}>
+      <div className="glass-hud p-4 h-28 flex flex-col justify-between overflow-hidden group">
+        <div className="flex justify-between items-center">
+          <span className="mono-data text-[8px] text-zinc-500">Voltage Meter</span>
+          <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">{currentData.voltage}V</span>
+        </div>
+        <motion.div 
+          animate={{ x: mouseX * 5, y: mouseY * 3 }}
+          transition={{ type: "spring", damping: 25, stiffness: 120 }}
+          className="h-12 w-full mt-2"
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartsData}>
+              <Line type="step" dataKey="voltage" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </motion.div>
+      </div>
+      <div className="glass-hud p-4 h-28 flex flex-col justify-between overflow-hidden group">
+        <div className="flex justify-between items-center">
+          <span className="mono-data text-[8px] text-zinc-500">Power Usage</span>
+          <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">{Math.round(currentData.power)}W</span>
+        </div>
+        <motion.div 
+          animate={{ x: mouseX * -3, y: mouseY * 6 }}
+          transition={{ type: "spring", damping: 25, stiffness: 120 }}
+          className="h-12 w-full mt-2"
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartsData}>
+              <YAxis domain={['auto', 'auto']} hide />
+              <Line type="monotone" dataKey="power" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </motion.div>
+      </div>
+      <div className="glass-hud p-4 h-28 flex flex-col justify-between overflow-hidden group">
+        <div className="flex justify-between items-center">
+          <span className="mono-data text-[8px] text-zinc-500">Battery Level</span>
+          <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">{Math.round(currentData.battery)}%</span>
+        </div>
+        <motion.div 
+          animate={{ x: mouseX * 6, y: mouseY * -4 }}
+          transition={{ type: "spring", damping: 25, stiffness: 120 }}
+          className="h-12 w-full mt-2"
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartsData}>
+              <YAxis domain={[0, 100]} hide />
+              <Line type="monotone" dataKey="battery" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </motion.div>
+      </div>
     </div>
-    <div className="h-full w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data}>
-          <Line 
-            type="monotone" 
-            dataKey="voltage" 
-            stroke="var(--accent-cyan)" 
-            strokeWidth={1.5} 
-            dot={false} 
-            isAnimationActive={false} 
-          />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  </div>
+  );
+};
+
+const VoiceOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, voiceConfidence }: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  onSend: (e: React.FormEvent) => void, 
+  input: string, 
+  setInput: (s: string) => void,
+  activeZone: string,
+  voiceConfidence: number
+}) => (
+  <AnimatePresence>
+    {isOpen && (
+      <>
+        <motion.div 
+          initial={{ opacity: 0 }} 
+          animate={{ opacity: 1 }} 
+          exit={{ opacity: 0 }} 
+          onClick={onClose}
+          className="fixed inset-0 bg-black/60 backdrop-blur-md z-[100]" 
+        />
+        <motion.div 
+          initial={{ y: "100%" }}
+          animate={{ y: 0 }}
+          exit={{ y: "100%" }}
+          transition={{ type: "spring", damping: 25, stiffness: 200 }}
+          className="fixed bottom-0 left-0 right-0 z-[101] p-6 lg:p-10 pointer-events-none"
+        >
+          <div className="max-w-3xl mx-auto glass-hud p-8 pointer-events-auto border-t-2 border-[var(--accent-gold)]/30 rounded-t-3xl">
+            <div className="mb-6 flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="mono-data text-[10px] text-[var(--accent-gold)] tracking-widest uppercase mb-1">Room-Aware Routing: {activeZone} Mic</span>
+                <div className="flex items-center gap-2">
+                   <div className="w-16 h-1 bg-white/10 rounded-full overflow-hidden">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${voiceConfidence}%` }}
+                        className="h-full bg-[var(--accent-gold)]"
+                      />
+                   </div>
+                   <span className="mono-data text-[8px] text-zinc-500">VOICE_AUTH: {voiceConfidence.toFixed(0)}%</span>
+                </div>
+              </div>
+              <span className="mono-data text-[8px] text-zinc-500">VOICE_TOKEN_ACTIVE</span>
+            </div>
+            <div className="flex items-center gap-6">
+              <div className="w-16 h-16 rounded-full bg-[var(--accent-gold)]/10 border border-[var(--accent-gold)]/20 flex items-center justify-center animate-pulse">
+                <Mic className="text-[var(--accent-gold)]" size={32} />
+              </div>
+              <form onSubmit={onSend} className="flex-1 flex gap-4">
+                <input 
+                  autoFocus
+                  placeholder="Ask something..."
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-6 py-4 text-white focus:outline-none focus:ring-1 focus:ring-[var(--accent-gold)] font-mono text-sm"
+                />
+                <button type="submit" className="bg-[var(--accent-gold)] text-black px-8 py-4 rounded-xl font-black uppercase text-xs tracking-widest hover:scale-105 transition-all">
+                  <Send size={18} />
+                </button>
+              </form>
+            </div>
+            <p className="mt-6 text-center text-zinc-500 mono-data text-[8px] tracking-[0.4em]">LISTENING_ACTIVE • ESC_TO_CANCEL</p>
+          </div>
+        </motion.div>
+      </>
+    )}
+  </AnimatePresence>
 );
 
-const DeviceHUDCard = ({ device, onToggle }: DeviceCardProps) => {
+const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardProps) => {
   const getIcon = () => {
     const active = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
     const color = active ? 'text-[var(--accent-gold)]' : 'text-zinc-600';
@@ -171,26 +333,114 @@ const DeviceHUDCard = ({ device, onToggle }: DeviceCardProps) => {
   };
 
   const isActive = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
+  const isCritical = device.state === 'critical' || device.status === 'ERROR';
+
+  const handleReboot = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fetch('/api/devices/lazarus-reboot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: device.id })
+    });
+  };
 
   return (
     <motion.div 
-      onClick={onToggle}
-      className={`glass-hud p-4 flex items-center justify-between group cursor-pointer ${isActive ? 'border-[var(--accent-gold)]/40 shadow-[0_0_20px_rgba(250,204,21,0.05)]' : ''}`}
+      layout
+      onClick={onExpand}
+      className={`glass-hud p-4 flex flex-col group cursor-pointer relative transition-all duration-500 ${isActive ? 'border-[var(--accent-gold)]/40 shadow-[0_0_20px_rgba(250,204,21,0.05)]' : ''} ${isExpanded ? 'col-span-2 row-span-2 ring-1 ring-[var(--accent-gold)]/20' : ''}`}
     >
-      <div className="flex items-center gap-4">
-        <div className={`p-3 rounded-lg border transition-all ${isActive ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]/20' : 'bg-white/5 border-white/5'}`}>
-          {getIcon()}
+      <div className="flex items-center justify-between w-full">
+        <div className="flex items-center gap-4">
+          <div className={`p-3 rounded-lg border transition-all ${isActive ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]/20' : 'bg-white/5 border-white/5'}`}>
+            {getIcon()}
+          </div>
+          <div className="flex flex-col">
+            <span className="text-sm font-bold tracking-tight text-white">{device.name}</span>
+            <div className="flex items-center gap-2">
+              <span className="mono-data text-[9px] text-zinc-500 uppercase">{device.state}</span>
+              <motion.span 
+                 animate={{ opacity: isCritical ? [0.2, 1, 0.2] : 1 }}
+                 transition={{ duration: 1, repeat: Infinity }}
+                 className={`w-1 h-1 rounded-full ${isActive ? 'bg-green-500' : isCritical ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} 
+              />
+              <span className="mono-data text-[7px] text-zinc-600 tracking-widest">{device.status}</span>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col">
-          <span className="text-sm font-bold tracking-tight text-white">{device.name}</span>
-          <span className="mono-data text-[9px] text-zinc-500">{device.state}</span>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            className={`w-10 h-5 rounded-full relative transition-all ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-white/10'}`}
+          >
+            <motion.div 
+              animate={{ x: isActive ? 20 : 0 }}
+              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-lg"
+            />
+          </button>
         </div>
       </div>
-      <div className={`w-1 h-8 rounded-full transition-all ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`} />
+
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="mt-6 border-t border-white/5 pt-6 space-y-6"
+          >
+             <div className="grid grid-cols-2 gap-4">
+                <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+                   <span className="mono-data text-[7px] text-zinc-500 block mb-1 uppercase">Signal Strength</span>
+                   <div className="flex items-end gap-0.5 h-3">
+                      {[1,2,3,4,5].map(i => <div key={i} className={`w-1 rounded-full ${i <= 4 ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`} style={{ height: `${i*20}%` }} />)}
+                   </div>
+                </div>
+                <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+                   <span className="mono-data text-[7px] text-zinc-500 block mb-1 uppercase">Relay Path</span>
+                   <span className="text-[10px] font-mono text-zinc-300">HUB_CENTRAL_01</span>
+                </div>
+             </div>
+
+             {device.type === 'light' && (
+                <div className="space-y-3">
+                   <div className="flex justify-between items-center px-1">
+                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Luminance</span>
+                      <span className="text-[10px] font-bold text-[var(--accent-gold)]">85%</span>
+                   </div>
+                   <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                      <div className="h-full bg-[var(--accent-gold)] w-[85%]" />
+                   </div>
+                </div>
+             )}
+
+             {device.type === 'climate' && (
+                <div className="space-y-3">
+                   <div className="flex justify-between items-center px-1">
+                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Set Point</span>
+                      <span className="text-[10px] font-bold text-[var(--accent-gold)]">22.5°C</span>
+                   </div>
+                   <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                      <div className="h-full bg-[var(--accent-gold)] w-[65%]" />
+                   </div>
+                </div>
+             )}
+
+             <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={handleReboot}
+                  className="flex-1 py-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-[8px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                >
+                   <RefreshCw size={10} />
+                   Lazarus Reboot
+                </button>
+             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };
-
 
 export default function App() {
   const [data, setData] = useState<SystemData | null>(null);
@@ -204,11 +454,153 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState<any[]>([]);
   const [isTraining, setIsTraining] = useState(false);
   const [trainingStep, setTrainingStep] = useState(0);
+  const [showVoiceOverlay, setShowVoiceOverlay] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [onboardingStep, setOnboardingStep] = useState<'intro' | 'scanning' | 'complete'>('intro');
+  const [onboardingStep, setOnboardingStep] = useState<'qr' | 'voice' | 'complete'>('qr');
   const [scannedDevices, setScannedDevices] = useState<string[]>([]);
   const [spatialPulseMessage, setSpatialPulseMessage] = useState<string | null>(null);
   const [trustLogs, setTrustLogs] = useState<{ id: string, message: string, timestamp: string, type: string }[]>([]);
+  const [isLocalConnection, setIsLocalConnection] = useState(false);
+  const [isSaaSTier, setIsSaaSTier] = useState(false);
+  const [isFindingPhone, setIsFindingPhone] = useState(false);
+  const [phoneTrackingResult, setPhoneTrackingResult] = useState<any>(null);
+  const [showVaultAuth, setShowVaultAuth] = useState(false);
+  const [vaultAction, setVaultAction] = useState<string | null>(null);
+  const [vaultPin, setVaultPin] = useState('');
+  const [vaultError, setVaultError] = useState<string | null>(null);
+  const [voiceConfidence, setVoiceConfidence] = useState(0); // 0-100%
+  const [isPhonePresent, setIsPhonePresent] = useState(true);
+  const [isVoiceVerified, setIsVoiceVerified] = useState(false);
+  const [ambientAudio, setAmbientAudio] = useState<AudioContext | null>(null);
+  const [ambientGain, setAmbientGain] = useState<GainNode | null>(null);
+  const [audioTheme, setAudioTheme] = useState<'deep_space' | 'nebula' | 'pulse'>('deep_space');
+  const [isGlobalMuted, setIsGlobalMuted] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<string>("Consider arming security protocols for the night.");
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
+  const [oscillators, setOscillators] = useState<OscillatorNode[]>([]);
+
+  const addTrustLog = (message: string, type: 'success' | 'warning' | 'info' | 'error' = 'info') => {
+    const log = {
+      id: Math.random().toString(36).substr(2, 9),
+      message,
+      timestamp: new Date().toLocaleTimeString([], { hour12: false }),
+      type
+    };
+    setTrustLogs(prev => [log, ...prev].slice(0, 10));
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.code === 'Space') {
+        e.preventDefault();
+        setShowVoiceOverlay(true);
+      }
+      
+      if (e.code === 'KeyM') {
+        setIsGlobalMuted(prev => !prev);
+      }
+      
+      if (e.key === 'Escape') {
+        setShowVoiceOverlay(false);
+        setShowVaultAuth(false);
+        setShowOnboarding(false);
+        setExpandedDeviceId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const initAmbientSound = () => {
+    if (ambientAudio) return;
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const gain = ctx.createGain();
+      gain.gain.value = 0; 
+      gain.connect(ctx.destination);
+
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      
+      const filter = ctx.createBiquadFilter();
+      filter.frequency.setValueAtTime(150, ctx.currentTime);
+
+      osc1.connect(gain);
+      osc2.connect(filter);
+      filter.connect(gain);
+      
+      setOscillators([osc1, osc2]);
+      applyAudioTheme(audioTheme, [osc1, osc2], ctx);
+
+      osc1.start();
+      osc2.start();
+      setAmbientAudio(ctx);
+      setAmbientGain(gain);
+      if (!isGlobalMuted) gain.gain.setTargetAtTime(0.015, ctx.currentTime, 2);
+    } catch (e) {
+      console.warn("Audio Context init failed", e);
+    }
+  };
+
+  const applyAudioTheme = (theme: string, oscs: OscillatorNode[], ctx: AudioContext) => {
+    if (oscs.length < 2) return;
+    switch(theme) {
+      case 'nebula':
+        oscs[0].frequency.setTargetAtTime(80, ctx.currentTime, 1);
+        oscs[1].frequency.setTargetAtTime(120, ctx.currentTime, 1);
+        oscs[0].type = 'sine';
+        oscs[1].type = 'sine';
+        break;
+      case 'pulse':
+        oscs[0].frequency.setTargetAtTime(30, ctx.currentTime, 1);
+        oscs[1].frequency.setTargetAtTime(90, ctx.currentTime, 1);
+        oscs[0].type = 'square';
+        oscs[1].type = 'sine';
+        break;
+      default: // deep_space
+        oscs[0].frequency.setTargetAtTime(45, ctx.currentTime, 1);
+        oscs[1].frequency.setTargetAtTime(65, ctx.currentTime, 1);
+        oscs[0].type = 'sine';
+        oscs[1].type = 'triangle';
+    }
+  };
+
+  useEffect(() => {
+    if (ambientAudio && oscillators.length > 0) {
+      applyAudioTheme(audioTheme, oscillators, ambientAudio);
+    }
+  }, [audioTheme]);
+
+  useEffect(() => {
+    if (ambientGain && ambientAudio) {
+      const target = isGlobalMuted ? 0 : 0.015;
+      ambientGain.gain.setTargetAtTime(target, ambientAudio.currentTime, 0.5);
+    }
+  }, [isGlobalMuted, ambientAudio, ambientGain]);
+
+  useEffect(() => {
+    const startOnInteraction = () => {
+      initAmbientSound();
+      window.removeEventListener('mousedown', startOnInteraction);
+    };
+    
+    const handleMouseMoveModulation = () => {
+      if (ambientGain && ambientAudio) {
+        // Boost volume slightly during movement, then let it decay
+        ambientGain.gain.cancelScheduledValues(ambientAudio.currentTime);
+        ambientGain.gain.setTargetAtTime(0.025, ambientAudio.currentTime, 0.1);
+        ambientGain.gain.setTargetAtTime(0.012, ambientAudio.currentTime + 0.1, 4);
+      }
+    };
+
+    window.addEventListener('mousedown', startOnInteraction);
+    window.addEventListener('mousemove', handleMouseMoveModulation);
+    return () => {
+      window.removeEventListener('mousedown', startOnInteraction);
+      window.removeEventListener('mousemove', handleMouseMoveModulation);
+    };
+  }, [ambientAudio, ambientGain]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -218,10 +610,12 @@ export default function App() {
   };
 
   const speakResponse = async (text: string) => {
+    if (isGlobalMuted) return;
     try {
-      // 1. Try Cloud Native AI Voice for Natural Conversation 
+      // 1. High-Fidelity Cloud Voice (SaaS Tier Simulation)
       const persona = data?.voice?.persona;
-      const voiceName = (persona?.toLowerCase() === 'onyx' || persona?.toLowerCase() === 'jarvis') ? 'Puck' : 'Kore'; 
+      // Selecting the most natural voices available in the model
+      const voiceName = isSaaSTier ? 'Charon' : 'Puck'; 
       
       const ttsResp = await ai.models.generateContent({
          model: "gemini-3.1-flash-tts-preview",
@@ -253,84 +647,53 @@ export default function App() {
          
          const source = audioContext.createBufferSource();
          source.buffer = audioBuffer;
-         source.playbackRate.value = data?.voice?.rate || 1.05;
+         // Slight rate adjustment for "Natural" cadence: 0.98 - 1.02 is the human sweet spot
+         source.playbackRate.value = isSaaSTier ? 1.0 : 1.05; 
          source.connect(audioContext.destination);
          source.start();
          
          return;
       }
     } catch (e) {
-      console.warn("Cloud TTS failed, falling back to offline browser TTS:", e);
+      console.warn("Cloud TTS failed, falling back to enhanced local engine:", e);
     }
     
-    // 2. Offline Fallback (Browser built-in TTS)
+    // 2. Enhanced Local Fallback (Free Tier - Non-Robotic)
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     
     const voices = window.speechSynthesis.getVoices();
     if (voices.length > 0) {
-      const preferredVoices = voices.filter(v => 
-        v.name.includes('Google UK English') || 
-        v.name.includes('Samantha') || 
-        v.name.includes('Microsoft') ||
-        v.name.includes('Natural') ||
-        v.name.includes('Siri')
-      );
+      // Prioritize modern Neural/Natural voices over legacy robotic ones
+      const preferredVoices = voices.sort((a, b) => {
+        const score = (v: SpeechSynthesisVoice) => {
+          if (v.name.includes('Natural')) return 10;
+          if (v.name.includes('Neural')) return 9;
+          if (v.name.includes('Google') && v.name.includes('UK')) return 8;
+          if (v.name.includes('Google') && v.name.includes('US')) return 7;
+          if (v.name.includes('Samantha')) return 6;
+          return 0;
+        };
+        return score(b) - score(a);
+      });
+      
       if (preferredVoices.length > 0) {
         utterance.voice = preferredVoices[0];
       }
     }
 
-    // Applying data-driven voice settings
-    if (data?.voice) {
-      utterance.pitch = data.voice.pitch;
-      utterance.rate = data.voice.rate;
-    } else {
-      utterance.pitch = 0.85;
-      utterance.rate = 0.95;
-    }
+    // Proportional Prosody: Humans vary pitch and rate slightly
+    utterance.pitch = isSaaSTier ? 1.05 : 0.95; 
+    utterance.rate = isSaaSTier ? 0.95 : 1.02; // SaaS is smoother/slower, Free is efficient but clear
     
     window.speechSynthesis.speak(utterance);
   };
 
   useEffect(() => {
-    const isFirstRun = !localStorage.getItem('ujo_setup_complete');
-    if (isFirstRun) {
-      setShowOnboarding(true);
-    }
+    // Initial fetch
+    fetchStates();
   }, []);
-
-  const handleStartSetup = () => {
-    const greeting = getGreeting();
-    const intro = `${greeting}. My name is Ujo, and I am your personal smart home assistant. I have been designed to keep your home secure, efficient, and proactive. I monitor your energy usage, protect your appliances from power surges, and manage access for your visitors. My intelligence is fully localized, meaning your data never leaves these walls. Let us begin by verifying my connection to your installed devices.`;
-    speakResponse(intro);
-    setOnboardingStep('scanning');
-  };
-
-  useEffect(() => {
-    if (onboardingStep === 'scanning' && data?.devices) {
-      const devicesToScan = data.devices;
-      let index = 0;
-      const interval = setInterval(() => {
-        if (index < devicesToScan.length) {
-          const device = devicesToScan[index];
-          if (device && device.id) {
-            setScannedDevices(prev => Array.from(new Set([...prev, device.id])));
-          }
-          index++;
-        } else {
-          clearInterval(interval);
-          setTimeout(() => {
-            setOnboardingStep('complete');
-            speakResponse("All systems verified. Your home is now under my protection.");
-            localStorage.setItem('ujo_setup_complete', 'true');
-          }, 1000);
-        }
-      }, 800);
-      return () => clearInterval(interval);
-    }
-  }, [onboardingStep]); // remove data from dependencies to avoid restarting interval on every real-time update
 
   const startTraining = () => {
     setIsTraining(true);
@@ -456,6 +819,14 @@ export default function App() {
       }
     });
 
+    socket.on('phone_sonar_active', (payload) => {
+       setSpatialPulseMessage(`SONAR_PING_ACTIVE: ${payload.room}`);
+       setTimeout(() => setSpatialPulseMessage(null), 10000);
+    });
+
+    const p2pInterval = setInterval(checkP2P, 10000);
+    checkP2P();
+
     // Fallback polling for HA
     const interval = setInterval(() => {
       fetch('/api/ha/status')
@@ -560,107 +931,97 @@ export default function App() {
   const sendVoiceCommand = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!voiceInput.trim()) return;
-
-    const controlDeviceFunctionDeclaration: FunctionDeclaration = {
-      name: "controlDevice",
-      parameters: {
-        type: Type.OBJECT,
-        description: "Toggle a smart home device or change its state.",
-        properties: {
-          deviceId: {
-            type: Type.STRING,
-            description: "The ID of the device to control (must be exact ID like 'light_living', 'ac_bedroom')."
-          },
-          action: {
-            type: Type.STRING,
-            description: "The desired action: 'on', 'off', 'locked', 'unlocked'."
-          }
-        },
-        required: ["deviceId", "action"]
-      }
-    };
-
-    const changeNameFunctionDeclaration: FunctionDeclaration = {
-      name: "changeAssistantName",
-      parameters: {
-        type: Type.OBJECT,
-        description: "Change the assistant's name (wake word) if the user asks.",
-        properties: {
-          newName: {
-            type: Type.STRING,
-            description: "The new name the user wants to call you."
-          }
-        },
-        required: ["newName"]
-      }
-    };
-
-    const devicesStr = data?.devices.map(d => `${d.name} (ID: ${d.id}, State: ${d.state})`).join(', ');
-
-    const contextSettings = `You are ${data?.assistantName || 'Ujo'}, the sentient smart home assistant. The current user speaking is ${activeUser}. \
-They are located in the ${activeZone}. \
-Current available devices: ${devicesStr}. \
-Grid power source: ${data?.powerSource}. Inverter Battery: ${data?.energy.battery}%. \
-You must provide conversational, human-like responses. \
-CRITICAL ROLE PERMISSIONS: If the activeUser is 'Guest', you must explicitly deny them access to unlocking devices or making purchases/dispatching. Only 'Owner' or 'Co-Admin' can do that. \
-If the user asks you to control a device, use the controlDevice tool with the exact deviceId (unless denied by role). \
-If the user asks to change your name, use the changeAssistantName tool (Owner/Co-Admin only). \
-If the user says "I'm here" or asks to re-anchor audio, confirm that the Spatial Re-anchoring Protocol is active, overriding mmWave/cameras, and audio is localized to ${activeZone}. \
-If they ask a general knowledge question (e.g. sports, weather, exchanges), use the googleSearch tool to find the exact latest info. \
-If they speak contextually (e.g. "turn on the light here"), infer the device from their activeZone (${activeZone}).`;
+    
+    // Simulate voice confidence processing
+    const confidence = 85 + Math.random() * 14;
+    setVoiceConfidence(confidence);
+    setIsVoiceVerified(true);
+    addTrustLog(`Voice input detected: confidence ${confidence.toFixed(1)}%`, 'info');
 
     try {
-      setNlpResponse('Processing...');
-      
-      const newHistory = [...chatHistory, `User ${activeUser} located in ${activeZone} says: ${voiceInput}`];
-      
-      const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
-        contents: [contextSettings, ...newHistory],
-        config: {
-          tools: [
-            { googleSearch: {} },
-            { functionDeclarations: [controlDeviceFunctionDeclaration, changeNameFunctionDeclaration] }
-          ],
-          toolConfig: { includeServerSideToolInvocations: true },
-        }
-      });
-
-      let replyText = response.text || '';
-      const functionCalls = response.functionCalls;
-      if (functionCalls && functionCalls.length > 0) {
-        for (const call of functionCalls) {
-          if (call.name === 'controlDevice') {
-            const { deviceId, action } = call.args as any;
-            await fetch('/api/device/toggle', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id: deviceId, state: action })
-            });
-            replyText += `\n[System Executed: ${action} on ${deviceId}]`;
-          } else if (call.name === 'changeAssistantName') {
-            const { newName } = call.args as any;
-            await fetch('/api/system/assistant-name', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: newName })
-            });
-            replyText += `\n[System Executed: Name changed to ${newName}]`;
+      const res = await fetch('/api/nlp-parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: voiceInput, 
+          room: activeZone,
+          securityFlags: {
+            voiceVerified: true,
+            phonePresent: isPhonePresent
           }
-        }
-        fetchStates();
+        }),
+      });
+      const resData = await res.json();
+      
+      if (resData.vaultRequired) {
+        setVaultAction(voiceInput);
+        setShowVaultAuth(true);
+        speakResponse(resData.response);
+      } else {
+        speakResponse(resData.response);
+        setNlpResponse(resData.response);
+        setTimeout(() => setNlpResponse(null), 10000);
       }
-
-      setChatHistory([...newHistory, `${data?.assistantName || 'Ujo'}: ${response.text || 'Action completed.'}`]);
-      setNlpResponse(replyText);
+      
       setVoiceInput('');
-      setTimeout(() => setNlpResponse(null), 15000);
+    } catch (error) {
+      console.error('NLP Error:', error);
+      speakResponse("Cognitive link interrupted.");
+    }
+  };
 
-      speakResponse(response.text || 'Done.');
-    } catch (err) {
-      console.error('NLP Parse failed', err);
-      speakResponse("I encountered an error while processing that.");
-      setNlpResponse("Error connecting to cognitive engine.");
+  const handleVaultAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVaultError(null);
+    try {
+      const res = await fetch('/api/system/vault/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: vaultPin })
+      });
+      if (res.ok) {
+        setShowVaultAuth(false);
+        setVaultPin('');
+        speakResponse("Manual PIN override confirmed. Executing Vault protocol.");
+        
+        const nlpRes = await fetch('/api/nlp-parse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            text: vaultAction, 
+            room: activeZone,
+            securityFlags: { voiceVerified: true, phonePresent: true }
+          }),
+        });
+        const nlpData = await nlpRes.json();
+        speakResponse(nlpData.response);
+        setNlpResponse(nlpData.response);
+        setTimeout(() => setNlpResponse(null), 10000);
+      } else {
+        setVaultError("Invalid Security PIN");
+      }
+    } catch (e) {
+      setVaultError("System Error");
+    }
+  };
+
+  const startOnboarding = () => {
+    setShowOnboarding(true);
+    setOnboardingStep('qr');
+    speakResponse("System initialized. Welcome to Ujo OS. Please scan the physical QR code to establish a secure link.");
+  };
+
+  const completeStep = async (step: 'qr' | 'voice') => {
+    if (step === 'qr') {
+      await fetch('/api/system/onboarding/qr-handshake', { method: 'POST' });
+      setOnboardingStep('voice');
+      speakResponse("Link confirmed. Welcome, Admin. Please read the calibration sentences displayed on your device.");
+    } else {
+      await fetch('/api/system/onboarding/voice-calibrate', { method: 'POST' });
+      setOnboardingStep('complete');
+      speakResponse("Setup complete. Ujo OS is now active and customized for your voice signature.");
+      setTimeout(() => setShowOnboarding(false), 2000);
+      addTrustLog("New SuperAdmin Biometric Signature Created", 'success');
     }
   };
 
@@ -706,6 +1067,46 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
     });
     fetchStates();
     speakResponse(`Voice personality changed to ${persona}.`);
+  };
+
+  const checkP2P = async () => {
+    // Simulation: randomly switch between local and cloud to demo the fluid switching
+    const res = await fetch(`/api/network/p2p-check?local=${Math.random() > 0.5}`);
+    const json = await res.json();
+    setIsLocalConnection(json.local);
+  };
+
+  const findMyPhone = async () => {
+    setIsFindingPhone(true);
+    setPhoneTrackingResult(null);
+    speakResponse("Verifying BLE RSSI signatures across edge microphones. One moment.");
+    
+    try {
+      const res = await fetch('/api/system/find-phone', { method: 'POST' });
+      const json = await res.json();
+      
+      setTimeout(() => {
+        setIsFindingPhone(false);
+        setPhoneTrackingResult(json);
+        if (json.status === 'ONLINE') {
+          speakResponse(`Triangulation successful. Your phone is currently in the ${json.room}. Playing sonar ping now.`);
+        } else {
+          speakResponse(json.message);
+        }
+      }, 3000);
+    } catch (e) {
+      setIsFindingPhone(false);
+      speakResponse("Unable to locate phone signature. Offline logs unavailable.");
+    }
+  };
+
+  const toggleSaaSTier = () => {
+    const next = !isSaaSTier;
+    setIsSaaSTier(next);
+    speakResponse(next 
+      ? "SaaS Premium Tier activated. Realistic voice engine and vendor automation unlocked." 
+      : "Reverting to Free Tier. Local core remains active. ElevenLabs and Twilio fallbacks disabled."
+    );
   };
 
   const checkSoftwareUpdate = async () => {
@@ -835,6 +1236,14 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
               <span className="mono-data text-[10px] text-zinc-400">{activeUser} Matrix</span>
               <span className="text-xs font-bold text-white italic capitalize">{data.location}</span>
            </div>
+           
+           <button 
+             onClick={() => setIsGlobalMuted(!isGlobalMuted)}
+             className={`p-3 rounded-xl border transition-all ${isGlobalMuted ? 'bg-red-500/10 border-red-500/30 text-red-500' : 'bg-white/5 border-white/10 text-zinc-500 hover:bg-white/10'}`}
+           >
+              {isGlobalMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+           </button>
+
            <AIOrb active={!!nlpResponse} />
         </div>
       </header>
@@ -879,7 +1288,7 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
           </div>
 
           <div className="glass-hud p-6">
-            <span className="mono-data text-[10px] text-zinc-400 block mb-4 italic">Operational Protocols</span>
+            <span className="mono-data text-[10px] text-zinc-400 block mb-4 italic">Quick Actions</span>
             <div className="flex flex-col gap-2">
                {[
                  { id: 'Standard', icon: Shield },
@@ -896,6 +1305,169 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
                  </button>
                ))}
             </div>
+          </div>
+
+          <div className="glass-hud p-6">
+             <div className="flex items-center gap-3 mb-4 text-[var(--accent-cyan)]">
+                <Link size={14} />
+                <span className="mono-data text-[10px] tracking-widest italic">HA Integration Matrix</span>
+             </div>
+             <div className="flex justify-between items-end">
+                <div className="flex flex-col gap-1">
+                   <span className="mono-data text-[10px] font-bold text-white tracking-widest">{haStatus?.connected ? 'CONNECTED' : 'OFFLINE'}</span>
+                   <span className="mono-data text-[8px] text-zinc-500">SYNC_NODES: {haStatus?.syncedDevices || 0}</span>
+                </div>
+                <div className={`w-2 h-2 rounded-full ${haStatus?.connected ? 'bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.5)]' : 'bg-red-500'}`} />
+             </div>
+          </div>
+
+          <div className="glass-hud p-6">
+             <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2 text-[var(--accent-gold)]">
+                   <Settings size={14} />
+                   <span className="mono-data text-[10px] uppercase font-bold tracking-widest">Audio Neural Link</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                   <div className={`w-1.5 h-1.5 rounded-full ${isGlobalMuted ? 'bg-red-500' : 'bg-green-500 animate-pulse'}`} />
+                   <span className="mono-data text-[7px] text-zinc-500">{isGlobalMuted ? 'OFF' : 'LIVE'}</span>
+                </div>
+             </div>
+             
+             <div className="space-y-4">
+                <div className="flex flex-col gap-2">
+                   <span className="mono-data text-[8px] text-zinc-500">Acoustic Archetype</span>
+                   <div className="grid grid-cols-3 gap-1">
+                      {['deep_space', 'nebula', 'pulse'].map(t => (
+                        <button 
+                          key={t}
+                          onClick={() => setAudioTheme(t as any)}
+                          className={`p-2 rounded-lg text-[7px] border font-black uppercase transition-all ${audioTheme === t ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)] text-[var(--accent-gold)]' : 'bg-black/20 border-white/5 text-zinc-600'}`}
+                        >
+                           {t.split('_')[0]}
+                        </button>
+                      ))}
+                   </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                   <div className="flex justify-between items-center">
+                      <span className="mono-data text-[8px] text-zinc-500">Volume Intensity</span>
+                      <span className="mono-data text-[8px] text-white">0.015</span>
+                   </div>
+                   <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden relative">
+                      <div className="absolute inset-0 bg-[var(--accent-gold)]/20 w-[1.5%]" />
+                   </div>
+                </div>
+             </div>
+          </div>
+
+          <div className="glass-hud p-6">
+             <div className="flex items-center gap-2 mb-4">
+                <Sparkles size={14} className="text-[var(--accent-gold)]" />
+                <span className="mono-data text-[10px] text-zinc-400">Contextual Insight</span>
+             </div>
+             <motion.div 
+               animate={{ opacity: [0.5, 1, 0.5] }}
+               transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+               className="p-4 bg-[var(--accent-gold)]/5 border border-[var(--accent-gold)]/10 rounded-xl"
+             >
+                <p className="mono-data text-[9px] text-[var(--accent-gold)] leading-relaxed italic tracking-wider">
+                   {aiSuggestion}
+                </p>
+             </motion.div>
+          </div>
+
+          <div className="glass-hud p-6">
+             <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2 text-[var(--accent-gold)]">
+                   <Cpu size={14} />
+                   <span className="mono-data text-[10px] tracking-widest italic uppercase">Ecosystem Core</span>
+                </div>
+                <span className={`mono-data text-[8px] px-2 py-0.5 rounded-full border ${isLocalConnection ? 'text-cyan-400 border-cyan-400/30 bg-cyan-400/10' : 'text-zinc-500 border-zinc-700 bg-zinc-900'}`}>
+                   {isLocalConnection ? 'DIRECT_P2P' : 'CLOUD_RELAY'}
+                </span>
+             </div>
+             <div className="flex flex-col gap-3">
+                <button 
+                  onClick={findMyPhone}
+                  disabled={isFindingPhone}
+                  className="w-full flex flex-col gap-2 p-3 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-all group"
+                >
+                   <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-3">
+                         <div className="w-8 h-8 rounded-lg bg-[var(--accent-gold)]/10 flex items-center justify-center">
+                            {isFindingPhone ? <RefreshCw className="text-[var(--accent-gold)] animate-spin" size={14} /> : <Scan className="text-[var(--accent-gold)]" size={14} />}
+                         </div>
+                         <span className="text-[10px] text-zinc-300 font-bold tracking-tight">Find My Phone</span>
+                      </div>
+                      <ChevronRight size={14} className="text-zinc-600 group-hover:translate-x-1 transition-transform" />
+                   </div>
+                   
+                   {phoneTrackingResult && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-black/40 rounded-lg p-2 mt-1 border border-white/5"
+                      >
+                         <div className="flex items-center gap-2 mb-1">
+                            <span className={`w-1.5 h-1.5 rounded-full ${phoneTrackingResult.status === 'ONLINE' ? 'bg-cyan-400' : 'bg-red-400'}`} />
+                            <span className="mono-data text-[7px] text-white tracking-widest">{phoneTrackingResult.status}</span>
+                         </div>
+                         <p className="text-[8px] text-zinc-400 leading-tight">{phoneTrackingResult.message || `Located in ${phoneTrackingResult.room}`}</p>
+                         {phoneTrackingResult.lastBattery && (
+                           <div className="mt-1 flex items-center gap-2">
+                              <Battery size={8} className="text-red-400" />
+                              <span className="mono-data text-[7px] text-red-400">{phoneTrackingResult.lastBattery}% at {phoneTrackingResult.timestamp}</span>
+                           </div>
+                         )}
+                      </motion.div>
+                   )}
+                </button>
+                
+                <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                   <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-lg ${isSaaSTier ? 'bg-cyan-400/10' : 'bg-zinc-800'} flex items-center justify-center`}>
+                         <Shield className={isSaaSTier ? 'text-cyan-400' : 'text-zinc-500'} size={14} />
+                      </div>
+                      <div className="flex flex-col">
+                         <span className="text-[10px] text-zinc-300 font-bold tracking-tight">SaaS Tier</span>
+                         <span className="mono-data text-[7px] text-zinc-500">{isSaaSTier ? 'PREMIUM_ACTIVE' : 'OFFLINE_FREE'}</span>
+                      </div>
+                   </div>
+                   <button 
+                     onClick={toggleSaaSTier}
+                     className={`w-10 h-5 rounded-full relative transition-all ${isSaaSTier ? 'bg-cyan-500' : 'bg-zinc-700'}`}
+                   >
+                      <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${isSaaSTier ? 'right-1' : 'left-1'}`} />
+                   </button>
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                   <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-lg ${isPhonePresent ? 'bg-green-400/10' : 'bg-red-400/10'} flex items-center justify-center`}>
+                         <Smartphone className={isPhonePresent ? 'text-green-400' : 'text-red-400'} size={14} />
+                      </div>
+                      <div className="flex flex-col">
+                         <span className="text-[10px] text-zinc-300 font-bold tracking-tight">Phone Presence</span>
+                         <span className="mono-data text-[7px] text-zinc-500">{isPhonePresent ? 'TRUSTED_LINK_UP' : 'DEVICE_DEAD/ABSENT'}</span>
+                      </div>
+                   </div>
+                   <button 
+                     onClick={() => setIsPhonePresent(!isPhonePresent)}
+                     className={`w-10 h-5 rounded-full relative transition-all ${isPhonePresent ? 'bg-green-500' : 'bg-zinc-700'}`}
+                   >
+                      <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${isPhonePresent ? 'right-1' : 'left-1'}`} />
+                   </button>
+                </div>
+
+                <button 
+                  onClick={startOnboarding}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl bg-[var(--accent-gold)]/10 border border-[var(--accent-gold)]/20 hover:bg-[var(--accent-gold)]/20 transition-all text-[var(--accent-gold)]"
+                >
+                   <Settings size={14} />
+                   <span className="text-[10px] font-bold tracking-tight uppercase">Run Onboarding Seq.</span>
+                </button>
+             </div>
           </div>
 
           <div className="glass-hud p-6">
@@ -921,11 +1493,17 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
           
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
              {data.devices.map(dev => (
-               <DeviceHUDCard key={dev.id} device={dev} onToggle={() => toggleDevice(dev.id, dev.state)} />
+               <DeviceHUDCard 
+                 key={dev.id} 
+                 device={dev} 
+                 onToggle={() => toggleDevice(dev.id, dev.state)} 
+                 isExpanded={expandedDeviceId === dev.id}
+                 onExpand={() => setExpandedDeviceId(expandedDeviceId === dev.id ? null : dev.id)}
+               />
              ))}
           </div>
 
-          <TelemetryStrip data={voltageHistory} />
+          <TelemetryStrip history={voltageHistory} />
         </div>
 
         {/* Right: Trust Console & Analytics */}
@@ -980,6 +1558,137 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
 
       </div>
 
+      <button 
+        onClick={() => setShowVoiceOverlay(true)}
+        className="fixed bottom-10 right-10 z-[80] w-16 h-16 rounded-full bg-[var(--accent-gold)] text-black flex items-center justify-center fab-glow hover:scale-110 transition-all pointer-events-auto"
+      >
+        <Mic size={28} />
+      </button>
+
+      <VoiceOverlay 
+        isOpen={showVoiceOverlay} 
+        onClose={() => setShowVoiceOverlay(false)}
+        onSend={(e) => {
+          sendVoiceCommand(e);
+          setShowVoiceOverlay(false);
+        }}
+        input={voiceInput}
+        setInput={setVoiceInput}
+        activeZone={activeZone}
+        voiceConfidence={voiceConfidence}
+      />
+
+      {/* VAULT AUTH MODAL */}
+      <AnimatePresence>
+        {showVaultAuth && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/80 backdrop-blur-xl">
+             <motion.div 
+               initial={{ scale: 0.9, opacity: 0 }}
+               animate={{ scale: 1, opacity: 1 }}
+               className="max-w-md w-full glass-hud p-8 border-t-2 border-red-500/50"
+             >
+                <div className="flex items-center gap-4 mb-6 text-red-500">
+                   <ShieldAlert size={32} />
+                   <div>
+                      <h2 className="text-xl font-black uppercase tracking-tight text-white leading-none">Vault Security</h2>
+                      <span className="mono-data text-[10px] tracking-[0.2em] opacity-60">PHONE_VERIFICATION_REQUIRED</span>
+                   </div>
+                </div>
+                <p className="text-sm text-zinc-400 mb-6 leading-relaxed">
+                   The requested action <span className="text-[var(--accent-gold)] font-mono">"{vaultAction}"</span> is identified as a high-security protocol. Please enter the SuperAdmin PIN to authorize via manual override.
+                </p>
+                <form onSubmit={handleVaultAuth} className="flex flex-col gap-4">
+                   <input 
+                     type="password"
+                     autoFocus
+                     placeholder="ENTER SECURE PIN"
+                     value={vaultPin}
+                     onChange={e => setVaultPin(e.target.value)}
+                     className="w-full bg-white/5 border border-white/10 rounded-xl px-6 py-4 text-center text-2xl tracking-[1em] text-white focus:outline-none focus:ring-1 focus:ring-red-500 font-mono"
+                   />
+                   {vaultError && <p className="text-center text-red-500 mono-data text-[10px]">{vaultError}</p>}
+                   <div className="grid grid-cols-2 gap-4">
+                      <button 
+                        type="button" 
+                        onClick={() => setShowVaultAuth(false)}
+                        className="p-4 rounded-xl border border-white/10 text-zinc-500 font-bold uppercase text-xs hover:bg-white/5 transition-all"
+                      >
+                         Cancel
+                      </button>
+                      <button 
+                        type="submit"
+                        className="p-4 rounded-xl bg-red-600 text-white font-black uppercase text-xs tracking-widest hover:bg-red-500 transition-all shadow-[0_0_20px_rgba(220,38,38,0.3)]"
+                      >
+                         Authorize
+                      </button>
+                   </div>
+                </form>
+             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ONBOARDING MODAL */}
+      <AnimatePresence>
+        {showOnboarding && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/90 backdrop-blur-2xl overflow-y-auto">
+             <motion.div 
+               initial={{ y: 20, opacity: 0 }}
+               animate={{ y: 0, opacity: 1 }}
+               className="max-w-2xl w-full glass-hud p-10 border-t-2 border-[var(--accent-gold)]"
+             >
+                {onboardingStep === 'qr' && (
+                  <div className="text-center">
+                     <QrCode size={64} className="mx-auto mb-6 text-[var(--accent-gold)]" />
+                     <h2 className="text-3xl font-black text-white uppercase tracking-tighter mb-4">Establishing Link</h2>
+                     <p className="text-zinc-500 mb-8 max-w-sm mx-auto">Scan the QR code on the Hub base to create a Zero-Knowledge P2P tunnel between your phone and Ujo OS.</p>
+                     <div className="w-48 h-48 bg-white mx-auto p-4 rounded-3xl mb-8 flex items-center justify-center">
+                        <QrCode size={120} className="text-black" />
+                     </div>
+                     <button 
+                       onClick={() => completeStep('qr')}
+                       className="px-10 py-4 bg-[var(--accent-gold)] text-black font-black uppercase tracking-widest rounded-2xl hover:scale-105 transition-all"
+                     >
+                        Link Established
+                     </button>
+                  </div>
+                )}
+
+                {onboardingStep === 'voice' && (
+                  <div className="text-center">
+                     <Mic size={64} className="mx-auto mb-6 text-[var(--accent-gold)] animate-pulse" />
+                     <h2 className="text-3xl font-black text-white uppercase tracking-tighter mb-4">Voice Calibration</h2>
+                     <p className="text-zinc-500 mb-8 max-w-sm mx-auto">Please read the following sentence aloud so the Hub can map your vocal tract signature.</p>
+                     <div className="bg-white/5 border border-white/5 p-8 rounded-3xl mb-8 italic text-xl text-zinc-300 font-serif">
+                        "Ujo, the sun is rising over the lagoon. Secure the perimeter and prepare for the day."
+                     </div>
+                     <button 
+                       onClick={() => completeStep('voice')}
+                       className="px-10 py-4 border-2 border-[var(--accent-gold)] text-[var(--accent-gold)] font-black uppercase tracking-widest rounded-2xl hover:bg-[var(--accent-gold)]/10 transition-all"
+                     >
+                        Confirm Biometrics
+                     </button>
+                  </div>
+                )}
+
+                {onboardingStep === 'complete' && (
+                  <div className="text-center">
+                     <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <Check size={40} className="text-green-500" />
+                     </div>
+                     <h2 className="text-3xl font-black text-white uppercase tracking-tighter mb-4">System Online</h2>
+                     <p className="text-zinc-500 mb-8 max-w-sm mx-auto">Your identity is now anchored to this Hub. The ecosystem is fully calibrated and autonomous.</p>
+                     <div className="inline-flex gap-4">
+                        <span className="mono-data text-[10px] text-green-500 tracking-widest">ENCRYPTED_P2P_ACTIVE</span>
+                        <span className="mono-data text-[10px] text-green-500 tracking-widest">ADMIN_VOICE_VERIFIED</span>
+                     </div>
+                  </div>
+                )}
+             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {spatialPulseMessage && (
           <motion.div 
@@ -989,154 +1698,6 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
             className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] px-8 py-4 glass-hud bg-[var(--accent-gold)]/20 border-[var(--accent-gold)] text-[var(--accent-gold)] font-mono text-[10px] uppercase tracking-widest font-bold glow-gold"
           >
             {spatialPulseMessage}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Voice Training Overlay */}
-      <AnimatePresence>
-        {isTraining && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] bg-black/95 backdrop-blur-2xl grid place-items-center p-6">
-            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="max-w-md w-full bento-card text-center items-center py-12">
-               <div className="w-24 h-24 bg-[var(--accent-gold)]/20 border border-[var(--accent-gold)]/30 rounded-full grid place-items-center mb-8 shadow-2xl shadow-yellow-500/10">
-                  <Mic size={40} className="text-[var(--accent-gold)] animate-pulse" />
-               </div>
-               <h3 className="text-2xl font-black italic uppercase tracking-tighter mb-2">Voice Biometrics</h3>
-               <p className="text-zinc-500 text-sm mb-8 font-mono uppercase tracking-widest">Step {trainingStep} of 3 • Local MFCC Extraction</p>
-               
-               <p className="text-xl font-medium text-white mb-10 leading-relaxed italic">
-                 {trainingStep === 1 && `"Hey Ujo, what is the weather like tomorrow?"`}
-                 {trainingStep === 2 && `"Ujo, lock the front door and set the alarm."`}
-                 {trainingStep === 3 && `"Ujo, turn off the living room lights."`}
-               </p>
-
-               <button onClick={nextTrainingStep} className="w-full py-5 bg-[var(--accent-gold)] text-black font-black uppercase tracking-widest rounded-xl hover:scale-[1.02] transition-all">
-                 Record Sample
-               </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      
-      {/* Smart Keypad Overlay */}
-      <AnimatePresence>
-        {showKeypad && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-xl grid place-items-center p-6">
-             <motion.div initial={{ y: 20 }} animate={{ y: 0 }} className="max-w-xs w-full glass-hud items-center p-8">
-                <Lock size={32} className="text-[var(--accent-gold)] mb-6 mx-auto" />
-                <h3 className="text-xl font-black italic uppercase tracking-tighter mb-1 text-center">Secure Unlock</h3>
-                <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-widest mb-8 text-center">4-Digit Cryptographic Code Required</p>
-                
-                <div className="flex gap-3 mb-8 justify-center">
-                  {[1, 2, 3, 4].map(i => (
-                    <div key={i} className={`w-3 h-3 rounded-full border border-zinc-700 ${pinBuffer.length >= i ? 'bg-[var(--accent-gold)] border-[var(--accent-gold)]' : ''}`} />
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 w-full mb-8">
-                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, '*', 0, '#'].map(val => (
-                     <button 
-                       key={val} 
-                       onClick={() => typeof val === 'number' && handleKeypadPress(val.toString())}
-                       className="aspect-square bg-white/5 border border-white/5 rounded-xl grid place-items-center font-black text-lg hover:bg-[var(--accent-gold)] hover:text-black transition-all"
-                     >
-                       {val}
-                     </button>
-                   ))}
-                </div>
-
-                <div className="flex gap-4 w-full">
-                  <button onClick={() => { setShowKeypad(false); setPinBuffer(''); }} className="flex-1 py-4 bg-white/5 border border-white/5 rounded-xl font-bold uppercase text-[10px] tracking-widest">Cancel</button>
-                  <button onClick={submitPin} disabled={pinBuffer.length < 4} className="flex-1 py-4 bg-[var(--accent-gold)] text-black rounded-xl font-black uppercase text-[10px] tracking-widest disabled:opacity-30">Authorize</button>
-                </div>
-             </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Global Onboarding Overlay */}
-      <AnimatePresence>
-        {showOnboarding && (
-          <motion.div 
-            initial={{ opacity: 0 }} 
-            animate={{ opacity: 1 }} 
-            exit={{ opacity: 0 }} 
-            className="fixed inset-0 z-[100] bg-[#050505] grid place-items-center p-6"
-          >
-            <div className="max-w-2xl w-full">
-              {onboardingStep === 'intro' && (
-                <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="text-center flex flex-col items-center">
-                  <div className="w-20 h-20 bg-[var(--accent-gold)] rounded-2xl grid place-items-center mb-8 shadow-2xl shadow-yellow-500/20">
-                    <Activity size={32} className="text-black" />
-                  </div>
-                  <h2 className="text-4xl font-black italic uppercase tracking-tighter mb-4">Welcome to Ujo OS</h2>
-                  <p className="text-zinc-400 text-lg mb-10 leading-relaxed font-mono">
-                    NEURAL_LINK: PENDING<br/>
-                    AWAITING_MASTER_REGISTRATION
-                  </p>
-                  <button 
-                    onClick={handleStartSetup}
-                    className="group flex items-center gap-4 px-10 py-6 bg-[var(--accent-gold)] text-black rounded-xl font-black uppercase tracking-widest hover:scale-105 transition-all shadow-xl shadow-yellow-500/10"
-                  >
-                    Initiate Neural Link <ChevronRight size={24} className="group-hover:translate-x-1 transition-transform" />
-                  </button>
-                </motion.div>
-              )}
-
-              {onboardingStep === 'scanning' && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-hud p-10">
-                  <div className="flex justify-between items-center mb-10">
-                    <div>
-                      <h3 className="text-2xl font-black italic uppercase tracking-tight">Integrity Scan</h3>
-                      <p className="text-xs font-mono text-[var(--accent-gold)] uppercase tracking-widest">Probing Z-Bridge Matrix...</p>
-                    </div>
-                    <RefreshCw size={24} className="animate-spin text-[var(--accent-gold)]" />
-                  </div>
-                  
-                  <div className="flex flex-col gap-4">
-                    {data.devices.map(device => {
-                      const isScanned = scannedDevices.includes(device.id);
-                      return (
-                        <motion.div 
-                          key={device.id}
-                          animate={{ opacity: isScanned ? 1 : 0.3 }}
-                          className={`flex items-center justify-between p-4 bg-white/5 rounded-xl border ${isScanned ? 'border-[var(--accent-gold)]/40' : 'border-white/5'}`}
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className={`p-2 rounded-lg ${isScanned ? 'bg-[var(--accent-gold)]/20 text-[var(--accent-gold)]' : 'bg-zinc-800 text-zinc-500'}`}>
-                              <Link size={16} />
-                            </div>
-                            <span className="text-sm font-bold">{device.name}</span>
-                          </div>
-                          <span className={`text-[10px] font-mono uppercase ${isScanned ? 'text-[var(--accent-gold)]' : 'text-zinc-600'}`}>
-                            {isScanned ? 'Verified' : 'Pending'}
-                          </span>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              )}
-
-              {onboardingStep === 'complete' && (
-                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center flex flex-col items-center">
-                  <div className="w-24 h-24 bg-[var(--accent-gold)] rounded-full grid place-items-center mb-8 shadow-2xl shadow-yellow-500/40">
-                    <Shield size={40} className="text-black" />
-                  </div>
-                  <h2 className="text-4xl font-black italic uppercase tracking-tighter mb-4">Protection Active</h2>
-                  <p className="text-zinc-400 text-lg mb-10 leading-relaxed font-mono">
-                    NEURAL_LINK: STABLE<br/>
-                    SECURITY_ARMOR: ONLINE
-                  </p>
-                  <button 
-                    onClick={() => setShowOnboarding(false)}
-                    className="px-12 py-6 border-2 border-[var(--accent-gold)] text-[var(--accent-gold)] rounded-xl font-black uppercase tracking-widest hover:bg-[var(--accent-gold)] hover:text-black transition-all shadow-xl shadow-yellow-500/5"
-                  >
-                    Enter Command Center
-                  </button>
-                </motion.div>
-              )}
-            </div>
           </motion.div>
         )}
       </AnimatePresence>

@@ -6,7 +6,7 @@ Welcome to the internal documentation for the Ujo OS "JARVIS" Prototype. This gu
 ```text
 /
 ├── server.ts             # The Brain: Node.js/Express server & SQLite logic
-├── ujo_os.db             # The Memory: Persistent SQLite database
+├── ujo_os_v2.db          # The Memory: Persistent SQLite database
 ├── ha_bridge.ts          # The Peripheral: Logic for Home Assistant syncing
 ├── index.html            # The Entry Point
 ├── package.json          # The Blueprint: Dependency definitions
@@ -22,7 +22,7 @@ Welcome to the internal documentation for the Ujo OS "JARVIS" Prototype. This gu
    ```bash
    npm install
    ```
-3. **Database Initialization**: The system automatically creates `ujo_os.db` on the first run.
+3. **Database Initialization**: The system automatically creates `ujo_os_v2.db` on the first run.
 4. **Launch Dev Server**:
    ```bash
    npm run dev

@@ -1,6 +1,6 @@
 {
   "name": "Ujo OS",
   "description": "A proactive, hybrid, offline-first Smart Home Operating System with Human-in-the-Loop AI oversight.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": []
 }

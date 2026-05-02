@@ -5,15 +5,24 @@ import { PrismaClient } from '@prisma/client';
 
 export function setupMQTT(io: Server, prisma: PrismaClient) {
   const brain = new DecisionEngine(prisma);
-  const client = mqtt.connect('mqtt://localhost:1883'); // Standard MQTT port
+  const brokerUrl = process.env.MQTT_BROKER || 'mqtt://localhost:1883';
+  const client = mqtt.connect(brokerUrl, {
+    reconnectPeriod: 5000, // Try every 5s instead of 1s
+    connectTimeout: 30 * 1000,
+  });
+
+  let connectionLogged = false;
 
   client.on('error', (err) => {
-    console.error('MQTT Connection Error:', err.message);
-    // Do not crash the process, just stay disconnected
+    if (!connectionLogged) {
+      console.warn('⚠️ MQTT Broker unavailable (ESP32/Hardware Link Offline). Simulation mode active.');
+      connectionLogged = true;
+    }
   });
 
   client.on('connect', () => {
-    console.log('📡 Hub connected to MQTT Broker (Ready for ESP32/Simulation)');
+    console.log('📡 Hub connected to MQTT Broker (Ready for ESP32/Hardware Line-up)');
+    connectionLogged = true;
     client.subscribe('ujo/sensors/#');
     client.subscribe('ujo/power/#');
   });

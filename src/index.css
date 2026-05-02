@@ -51,19 +51,42 @@ body {
   box-shadow: 0 0 20px rgba(250, 204, 21, 0.15);
 }
 
+.fab-glow {
+  box-shadow: 0 0 30px rgba(250, 204, 21, 0.3), inset 0 0 10px rgba(250, 204, 21, 0.2);
+}
+
 .glow-cyan {
   box-shadow: 0 0 20px rgba(0, 255, 255, 0.15);
 }
 
 /* AI Orb Animation */
 @keyframes orb-pulse {
-  0% { transform: scale(1); filter: brightness(1); }
-  50% { transform: scale(1.05); filter: brightness(1.2); }
-  100% { transform: scale(1); filter: brightness(1); }
+  0% { transform: scale(1); filter: brightness(1) blur(4px); opacity: 0.7; }
+  33% { transform: scale(1.02) rotate(2deg); filter: brightness(1.1) blur(5px); }
+  66% { transform: scale(0.98) rotate(-2deg); filter: brightness(0.9) blur(3px); }
+  100% { transform: scale(1); filter: brightness(1) blur(4px); opacity: 0.7; }
+}
+
+@keyframes orb-glow {
+  0% { box-shadow: 0 0 20px rgba(250, 204, 21, 0.2), inset 0 0 10px rgba(250, 204, 21, 0.1); }
+  50% { box-shadow: 0 0 60px rgba(250, 204, 21, 0.5), inset 0 0 20px rgba(250, 204, 21, 0.3); }
+  100% { box-shadow: 0 0 20px rgba(250, 204, 21, 0.2), inset 0 0 10px rgba(250, 204, 21, 0.1); }
+}
+
+@keyframes orb-active-pulse {
+  0% { transform: scale(1) blur(4px); filter: saturate(1.2); }
+  25% { transform: scale(1.15) blur(10px); filter: saturate(2); }
+  50% { transform: scale(1.05) blur(6px); filter: saturate(1.5); }
+  75% { transform: scale(1.25) blur(12px); filter: saturate(2.5); }
+  100% { transform: scale(1) blur(4px); filter: saturate(1.2); }
 }
 
 .animate-orb {
-  animation: orb-pulse 4s ease-in-out infinite;
+  animation: orb-pulse 6s ease-in-out infinite;
+}
+
+.active-orb {
+  animation: orb-active-pulse 0.8s ease-in-out infinite, orb-glow 0.8s ease-in-out infinite;
 }
 
 /* Custom Scrollbar */

@@ -110,6 +110,84 @@ class StateManager {
   }
 
 
+  // --- SPATIAL LOCATOR: Find My Phone ---
+  async findPhone() {
+    // Check if phone is "online" (mocked check)
+    const isPhoneOnline = Math.random() > 0.3; // 70% chance online for demo
+
+    if (isPhoneOnline) {
+      const triangulation = [
+        { room: 'Living Room', rssi: -65, status: 'Weak' },
+        { room: 'Kitchen', rssi: -42, status: 'Strong' },
+        { room: 'Bedroom', rssi: -71, status: 'Very Weak' },
+      ];
+      
+      const strongest = triangulation.sort((a, b) => b.rssi - a.rssi)[0];
+      
+      await this.triggerAnomaly(
+        'Spatial Locator Success',
+        `Phone heartbeat detected. Strongest signal in ${strongest.room} (-42dBm). Sonar activated.`,
+        'info',
+        'system'
+      );
+      
+      if (io) {
+        io.emit('phone_sonar_active', { room: strongest.room });
+      }
+      return { success: true, room: strongest.room, battery: 88, status: 'ONLINE' };
+    } else {
+      // Scenario A/B: Dead or Out of House
+      const isDeadInside = Math.random() > 0.5;
+      const response = isDeadInside 
+        ? { 
+            success: true, 
+            status: 'DEAD_INSIDE', 
+            lastKnownRoom: 'Living Room', 
+            lastBattery: 1, 
+            timestamp: '16:12',
+            message: "Phone battery dropped to 1% at 4:12 PM. Its last known location was near the Living Room couch." 
+          }
+        : { 
+            success: true, 
+            status: 'OFF_SITE', 
+            lastGeofenceExit: '08:45',
+            message: "Phone is not within the home network. It was last registered leaving the geofence at 8:45 AM." 
+          };
+
+      await this.triggerAnomaly(
+        'Spatial Locator Fallback',
+        response.message,
+        'medium',
+        'system'
+      );
+
+      return response;
+    }
+  }
+
+  // --- LAZARUS REBOOT ---
+  async lazarusReboot(deviceId: string) {
+    const device = await prisma.device.findUnique({ where: { id: deviceId } });
+    if (!device) return { success: false, message: 'Device not found' };
+
+    // Simulate power cycle
+    await prisma.device.update({ where: { id: deviceId }, data: { status: 'REBOOTING' } });
+    await this.broadcastUpdate();
+
+    setTimeout(async () => {
+      await prisma.device.update({ where: { id: deviceId }, data: { status: 'ONLINE' } });
+      await this.triggerAnomaly(
+        'Lazarus Self-Heal',
+        `Device ${device.name} was unresponsive. Autonomous power-cycle (3s) successful. Re-synced to BLE Mesh.`,
+        'low',
+        'system'
+      );
+      await this.broadcastUpdate();
+    }, 3000);
+
+    return { success: true };
+  }
+
   async broadcastUpdate() {
     if (io) {
       const data = await this.getStates();
@@ -236,14 +314,16 @@ class StateManager {
     await this.broadcastUpdate();
   }
 
-  async nlpParse(rawText: string) {
+  async nlpParse(rawText: string, room?: string, securityFlags?: { voiceVerified: boolean, phonePresent: boolean }) {
     const text = rawText.toLowerCase();
     const config = await prisma.systemConfig.findUnique({ where: { id: 'GLOBAL' } });
     const currentMode = config?.mode;
 
-    let intents = [];
+    const { voiceVerified = false, phonePresent = false } = securityFlags || {};
+
     let responses: string[] = [];
     let success = false;
+    let vaultRequired = false;
 
     // Multi-intent splitter
     const commands = text.split(/ and | then |, /);
@@ -251,27 +331,52 @@ class StateManager {
     for (const cmd of commands) {
       let cmdProcessed = false;
 
-      if (cmd.includes('light on')) {
-        await this.updateDevice('light_1', 'on');
-        responses.push("Light activated");
-        cmdProcessed = true;
-      } else if (cmd.includes('light off')) {
-        await this.updateDevice('light_1', 'off');
-        responses.push("Light deactivated");
-        cmdProcessed = true;
-      } else if (cmd.includes('lock door') || cmd.includes('door lock')) {
-        await this.updateDevice('lock_1', 'locked');
-        responses.push("Door secured");
-        cmdProcessed = true;
-      } else if (cmd.includes('unlock') || cmd.includes('door open')) {
-        // CONFLICT CHECK: Can't unlock in Away mode via voice alone (Security Priority)
-        if (currentMode === 'Away') {
-          responses.push("Refused. Cannot unlock door while in Away Mode.");
-        } else {
-          await this.updateDevice('lock_1', 'unlocked');
-          responses.push("Door unlocked");
+      // Room-Aware Logic
+      let targetSuffix = '';
+      if (room) {
+        if (room.toLowerCase().includes('kitchen')) targetSuffix = 'Kitchen';
+        if (room.toLowerCase().includes('living')) targetSuffix = 'Living Room';
+        if (room.toLowerCase().includes('bedroom')) targetSuffix = 'Bedroom';
+      }
+
+      // TIER 1: ENVIRONMENT (Low Security - Voice Only OK)
+      if (cmd.includes('light on') || cmd.includes('light off')) {
+        const devices = await prisma.device.findMany({ where: { type: 'light' } });
+        const target = devices.find(d => d.name.includes(targetSuffix)) || devices[0];
+        if (target) {
+          const newState = cmd.includes('on') ? 'on' : 'off';
+          await this.updateDevice(target.id, newState);
+          responses.push(`${target.name} ${newState === 'on' ? 'activated' : 'deactivated'}`);
+          cmdProcessed = true;
         }
-        cmdProcessed = true;
+      } else if (cmd.includes('ac on') || cmd.includes('ac off')) {
+         const devices = await prisma.device.findMany({ where: { type: 'climate' } });
+         const target = devices.find(d => d.name.includes(targetSuffix)) || devices[0];
+         if (target) {
+           const newState = cmd.includes('on') ? 'on' : 'off';
+           await this.updateDevice(target.id, newState);
+           responses.push(`${target.name} ${newState === 'on' ? 'active' : 'idle'}`);
+           cmdProcessed = true;
+         }
+      } 
+      // TIER 2: VAULT (High Security - Phone or PIN Required)
+      else if (cmd.includes('unlock') || cmd.includes('door open') || cmd.includes('gate') || cmd.includes('payment')) {
+        if (!phonePresent && !voiceVerified) {
+          responses.push("Security protocol violation. Authentication required.");
+          vaultRequired = true;
+        } else if (!phonePresent && voiceVerified) {
+          responses.push("Security protocol requires phone verification for Vault features. Please use the physical keypad PIN override.");
+          vaultRequired = true;
+        } else {
+          // Authorized
+          if (cmd.includes('unlock') || cmd.includes('door')) {
+             await this.updateDevice('lock_1', 'unlocked');
+             responses.push("Door unlocked. Welcome home, Admin.");
+          } else {
+             responses.push("Action authorized. Dispatching request.");
+          }
+          cmdProcessed = true;
+        }
       } else if (cmd.includes('energy') || cmd.includes('weather')) {
         responses.push("Tomorrow will be overcast. Run high-vampire loads today.");
         cmdProcessed = true;
@@ -285,9 +390,9 @@ class StateManager {
 
     const response = responses.length > 0 
       ? responses.join(". ") + "." 
-      : "I parsed your input but no specific hardware triggers were found.";
+      : "I parsed your input but no specific triggers were activated.";
 
-    return { success, response, intents: commands.length };
+    return { success, response, intents: commands.length, vaultRequired };
   }
 }
 
@@ -404,8 +509,8 @@ async function startServer() {
 
   // NLP Parse
   app.post('/api/nlp-parse', async (req, res) => {
-    const { text } = req.body;
-    const result = await stateManager.nlpParse(text);
+    const { text, room, securityFlags } = req.body;
+    const result = await stateManager.nlpParse(text, room, securityFlags);
     res.json(result);
   });
 
@@ -554,6 +659,43 @@ async function startServer() {
     sendPulse('[Spatial Re-anchoring Protocol]: Matched User A voice print via Kitchen mic array. Reversing move. Updating radar weights.', 20500);
 
     res.json({ success: true, message: 'Tracking override initiated' });
+  });
+
+  // --- ECOSYSTEM ENDPOINTS ---
+  
+  app.get('/api/network/p2p-check', (req, res) => {
+    // Detect if "Local" by checking IP or a specific header
+    const isLocal = req.query.local === 'true';
+    res.json({ local: isLocal, latency: isLocal ? '0ms' : '240ms' });
+  });
+
+  app.post('/api/system/onboarding/qr-handshake', (req, res) => {
+    res.json({ success: true, message: 'Cryptographic link established. No cloud registration required.' });
+  });
+
+  app.post('/api/system/onboarding/voice-calibrate', (req, res) => {
+    res.json({ success: true, message: 'Voice signature localized. User A identified as SuperAdmin.' });
+  });
+
+  app.post('/api/system/vault/auth', async (req, res) => {
+     const { pin } = req.body;
+     if (pin === '1234') { // Admin PIN
+        await stateManager.triggerAnomaly('Vault Override Used', 'Manual PIN used for secure action authorization.', 'medium', 'security');
+        res.json({ success: true });
+     } else {
+        res.status(403).json({ success: false, message: 'Invalid Admin PIN' });
+     }
+  });
+
+  app.post('/api/system/find-phone', async (req, res) => {
+    const result = await stateManager.findPhone();
+    res.json({ success: true, ...result });
+  });
+
+  app.post('/api/devices/lazarus-reboot', async (req, res) => {
+    const { id } = req.body;
+    const result = await stateManager.lazarusReboot(id);
+    res.json(result);
   });
 
   app.get('/api/test-env', (req, res) => {

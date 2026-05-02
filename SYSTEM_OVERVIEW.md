@@ -21,7 +21,7 @@
 ### Backend Entry Point (`/server.ts`)
 - **What it does**: Handles the Express API, Socket.io server, and database operations.
 - **How it works**: 
-  - Initializes a local SQLite database (`ujo_os.db`) with tables for devices, configurations, alerts, and access profiles.
+  - Initializes a local SQLite database (`ujo_os_v2.db`) with tables for devices, configurations, alerts, and access profiles.
   - Manages a **StateManager** class that centralizes the logic for device state updates, energy load shedding, and duress protocols.
   - Hosts the REST API for state fetching, NLP parsing, and simulation triggers.
   - Integrates with the `HABridge` for Home Assistant synchronization.

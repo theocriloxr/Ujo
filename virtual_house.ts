@@ -6,10 +6,18 @@ import mqtt from 'mqtt';
  * It generates grid surges, gas leaks, and motion events to test the Brain.
  */
 function startSimulation() {
-  const client = mqtt.connect('mqtt://localhost:1883');
+  const brokerUrl = process.env.MQTT_BROKER || 'mqtt://localhost:1883';
+  const client = mqtt.connect(brokerUrl, {
+    reconnectPeriod: 10000, // Very slow retry for simulation
+  });
+
+  let hasLoggedError = false;
 
   client.on('error', (err) => {
-    console.error('Virtual House MQTT Error:', err.message);
+    if (!hasLoggedError) {
+      console.warn('🏘️  VIRTUAL HOUSE: Simulated Hardware link suspended (No local broker).');
+      hasLoggedError = true;
+    }
   });
 
   let gridVoltage = 220;
