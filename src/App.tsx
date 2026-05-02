@@ -20,13 +20,8 @@ import {
   Link,
   RefreshCw,
   Download,
-  Scan,
-  ShieldAlert,
-  Info,
-  CheckCircle2
+  Scan
 } from 'lucide-react';
-
-import TrustControlPanel from './components/TrustControlPanel';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { io } from 'socket.io-client';
@@ -53,6 +48,11 @@ interface EnergyData {
   battery: number;
   solar: number;
   forecast: string;
+}
+
+interface DeviceCardProps {
+  device: Device;
+  onToggle: () => void;
 }
 
 interface Alert {
@@ -90,65 +90,107 @@ interface HAStatus {
   syncedDevices: number;
 }
 
-// --- COMPONENTS ---
+// --- HUD COMPONENTS ---
 
-interface DeviceCardProps {
-  device: Device;
-  onToggle: () => void | Promise<void>;
-  key?: string | number;
-}
+const AIOrb = ({ active }: { active: boolean }) => (
+  <div className="relative w-32 h-32 flex items-center justify-center">
+    <div className={`absolute inset-0 rounded-full bg-[var(--accent-gold)] opacity-10 blur-2xl transition-all duration-1000 ${active ? 'scale-150 opacity-20' : 'scale-100'}`} />
+    <motion.div 
+      animate={{ 
+        scale: active ? [1, 1.1, 1] : 1,
+        boxShadow: active 
+          ? ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.5)", "0 0 20px rgba(250,204,21,0.2)"]
+          : "0 0 20px rgba(250,204,21,0.1)"
+      }}
+      transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+      className="w-16 h-16 rounded-full bg-gradient-to-tr from-yellow-600 to-yellow-200 border border-white/20 relative z-10 animate-orb"
+    >
+      <div className="absolute inset-2 rounded-full bg-black/40 backdrop-blur-sm shadow-inner" />
+    </motion.div>
+  </div>
+);
 
-const DeviceCard = ({ device, onToggle }: DeviceCardProps) => {
+const DigitalTwinMockup = () => (
+  <div className="relative w-full h-[300px] lg:h-[500px] overflow-hidden rounded-3xl group">
+    <div className="absolute inset-0 opacity-20" 
+      style={{
+        backgroundImage: `linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)`,
+        backgroundSize: '40px 40px',
+        transform: 'perspective(1000px) rotateX(60deg) translateY(-100px)',
+        transformOrigin: 'top'
+      }} 
+    />
+    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+       <div className="w-64 h-64 border border-[var(--accent-gold)]/20 rounded-lg transform rotate-45 animate-pulse" />
+       <div className="absolute w-48 h-48 border border-[var(--accent-cyan)]/20 rounded-lg transform rotate-45 scale-75" />
+       <div className="absolute w-full h-full bg-gradient-to-t from-[#050505] via-transparent to-transparent" />
+    </div>
+    <div className="absolute top-4 left-4 flex flex-col gap-1">
+      <span className="mono-data text-[10px] text-[var(--accent-gold)]">Scan Mode: Active</span>
+      <span className="mono-data text-[8px] text-zinc-500">Spatial Integrity: 98.4%</span>
+    </div>
+  </div>
+);
+
+const TelemetryStrip = ({ data }: { data: any[] }) => (
+  <div className="glass-hud p-6 h-32 flex flex-col justify-between">
+    <div className="flex justify-between items-center mb-2">
+      <span className="mono-data text-[10px] text-zinc-400">Live Power Consumption Grid</span>
+      <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">228.4V NOMINAL</span>
+    </div>
+    <div className="h-full w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data}>
+          <Line 
+            type="monotone" 
+            dataKey="voltage" 
+            stroke="var(--accent-cyan)" 
+            strokeWidth={1.5} 
+            dot={false} 
+            isAnimationActive={false} 
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  </div>
+);
+
+const DeviceHUDCard = ({ device, onToggle }: DeviceCardProps) => {
   const getIcon = () => {
+    const active = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
+    const color = active ? 'text-[var(--accent-gold)]' : 'text-zinc-600';
+    
     switch (device.type) {
-      case 'light': return <Lightbulb className={device.state === 'on' ? 'text-[var(--accent)]' : 'text-zinc-500'} />;
-      case 'lock': return <Lock className={device.state === 'locked' ? 'text-[var(--accent)]' : 'text-zinc-500'} />;
-      case 'climate': return <Thermometer className="text-zinc-400" />;
-      case 'appliance': return <Zap className={device.state === 'normal' ? 'text-zinc-400' : 'text-red-500'} />;
-      case 'sensor': return <Activity className="text-zinc-400" />;
-      default: return <Settings />;
+      case 'light': return <Lightbulb className={color} size={18} />;
+      case 'lock': return <Lock className={color} size={18} />;
+      case 'climate': return <Thermometer className={color} size={18} />;
+      case 'appliance': return <Zap className={color} size={18} />;
+      case 'sensor': return <Activity className={color} size={18} />;
+      default: return <Settings className={color} size={18} />;
     }
   };
 
+  const isActive = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
+
   return (
     <motion.div 
-      layout
-      className="bento-card justify-between h-44 group cursor-pointer hover:border-zinc-500 transition-all shadow-sm"
       onClick={onToggle}
-      id={`device-${device.id}`}
+      className={`glass-hud p-4 flex items-center justify-between group cursor-pointer ${isActive ? 'border-[var(--accent-gold)]/40 shadow-[0_0_20px_rgba(250,204,21,0.05)]' : ''}`}
     >
-      <div className="flex justify-between items-start">
-        <div className="p-3 bg-zinc-800/80 rounded-2xl group-hover:bg-[var(--accent-muted)] transition-colors">
+      <div className="flex items-center gap-4">
+        <div className={`p-3 rounded-lg border transition-all ${isActive ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]/20' : 'bg-white/5 border-white/5'}`}>
           {getIcon()}
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className={`indicator ${device.status === 'ONLINE' ? 'active' : ''}`} />
-          {device.category === 'HEAVY' && (
-            <button
-              id={`shed-${device.id}`}
-              onClick={async (e) => {
-                e.stopPropagation();
-                try {
-                  await fetch(`/api/devices/${device.id}/toggle-sheddable`, { method: 'POST' });
-                } catch (err) { console.error(err); }
-              }}
-              title={device.isSheddable ? "Load shedding enabled" : "Always allowed on Inverter"}
-              className={`px-1.5 py-0.5 rounded text-[8px] uppercase font-bold tracking-tighter transition-all ${device.isSheddable ? 'bg-red-900/40 text-red-400 border border-red-800/50' : 'bg-green-900/40 text-green-400 border border-green-800/50'}`}
-            >
-              {device.isSheddable ? 'Shed' : 'Bypass'}
-            </button>
-          )}
+        <div className="flex flex-col">
+          <span className="text-sm font-bold tracking-tight text-white">{device.name}</span>
+          <span className="mono-data text-[9px] text-zinc-500">{device.state}</span>
         </div>
       </div>
-      <div>
-        <h3 className="font-semibold text-sm text-zinc-100">{device.name}</h3>
-        <p className="text-[10px] font-mono tech-text-dim uppercase tracking-wider mt-1">
-          {device.state} {device.powerUsage > 0 ? `• ${device.powerUsage}W` : ''}
-        </p>
-      </div>
+      <div className={`w-1 h-8 rounded-full transition-all ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`} />
     </motion.div>
   );
 };
+
 
 export default function App() {
   const [data, setData] = useState<SystemData | null>(null);
@@ -166,6 +208,7 @@ export default function App() {
   const [onboardingStep, setOnboardingStep] = useState<'intro' | 'scanning' | 'complete'>('intro');
   const [scannedDevices, setScannedDevices] = useState<string[]>([]);
   const [spatialPulseMessage, setSpatialPulseMessage] = useState<string | null>(null);
+  const [trustLogs, setTrustLogs] = useState<{ id: string, message: string, timestamp: string, type: string }[]>([]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -395,10 +438,22 @@ export default function App() {
       });
     });
 
-    socket.on('spatial-pulse', (msg) => {
-      setSpatialPulseMessage(msg);
-      // Wait slightly longer than the pulse gap so the user can read it, but clears if no more
-      setTimeout(() => setSpatialPulseMessage(null), 3000);
+    socket.on('trust_log_update', (log) => {
+      setTrustLogs(prev => [log, ...prev].slice(0, 20));
+      // Speak the log if it's high severity
+      if (log.message.includes('CRITICAL') || log.message.includes('ALERT')) {
+        speakResponse(log.message);
+      }
+    });
+
+    socket.on('sensor_update', (payload) => {
+      // Logic for chart or real-time sensor text
+      if (payload.topic.includes('power/grid')) {
+        setVoltageHistory(prev => {
+          const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage: payload.data.voltage }];
+          return newHistory.slice(-20);
+        });
+      }
     });
 
     // Fallback polling for HA
@@ -707,6 +762,55 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
     } catch(e) { console.error(e); }
   };
 
+  const renderTrustPanel = () => (
+    <div className="bento-card bg-zinc-950/80 border-dashed border-zinc-800">
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex items-center gap-2">
+          <Shield className="text-[var(--accent)]" size={14} />
+          <p className="text-[10px] font-mono text-zinc-100 uppercase tracking-widest">Cognitive Trust Panel</p>
+        </div>
+        <div className="flex gap-2">
+          <button 
+             onClick={() => setTrustLogs([])}
+             className="text-[8px] uppercase tech-text-dim hover:text-white transition-colors"
+          >
+            Clear Data
+          </button>
+        </div>
+      </div>
+      <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+        {trustLogs.length === 0 ? (
+          <p className="text-[10px] text-zinc-600 italic font-mono py-4">Waiting for autonomous system logs...</p>
+        ) : (
+          trustLogs.map((log) => (
+            <motion.div 
+              initial={{ opacity: 0, x: -10 }} 
+              animate={{ opacity: 1, x: 0 }} 
+              key={log.id} 
+              className={`p-3 rounded-xl border ${
+                log.message.includes('CRITICAL') 
+                  ? 'bg-red-500/5 border-red-500/20' 
+                  : 'bg-zinc-900/50 border-zinc-800'
+              }`}
+            >
+              <p className={`text-[10px] font-medium leading-relaxed ${
+                log.message.includes('CRITICAL') ? 'text-red-400' : 'text-zinc-200'
+              }`}>
+                {log.message}
+              </p>
+              <div className="flex justify-between items-center mt-2">
+                <span className="text-[8px] font-mono tech-text-dim">LOG_ENTRY_{log.id.slice(-4)}</span>
+                <span className="text-[8px] font-mono tech-text-dim italic">
+                  {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+              </div>
+            </motion.div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
   if (loading || !data) {
     return (
       <div className="min-h-screen grid place-items-center bg-[var(--bg)]">
@@ -716,332 +820,186 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
         </div>
       </div>
     );
-  }
-
-  return (
-    <div className="min-h-screen bg-[var(--bg)] flex flex-col md:flex-row p-6 md:p-8 gap-8 overflow-hidden selection:bg-[var(--accent)] selection:text-black">
+  }  return (
+    <div className="min-h-screen bg-[#050505] flex flex-col selection:bg-[var(--accent-gold)] selection:text-black p-4 lg:p-6 pb-20">
       
+      {/* Top HUD Header */}
+      <header className="flex justify-between items-start mb-8 z-50">
+        <div className="flex flex-col">
+          <h1 className="text-2xl font-black italic tracking-tighter text-[var(--accent-gold)]">UJO OS</h1>
+          <span className="mono-data text-[10px] text-zinc-500 tracking-[0.4em]">Autonomous Context Engine v2.0A</span>
+        </div>
+        
+        <div className="flex items-center gap-8">
+           <div className="flex flex-col items-end">
+              <span className="mono-data text-[10px] text-zinc-400">{activeUser} Matrix</span>
+              <span className="text-xs font-bold text-white italic capitalize">{data.location}</span>
+           </div>
+           <AIOrb active={!!nlpResponse} />
+        </div>
+      </header>
+
+      <div className="flex-1 grid grid-cols-12 gap-6 items-start">
+        
+        {/* Left: Environment & Energy HUD */}
+        <div className="col-span-12 lg:col-span-3 flex flex-col gap-6">
+          
+          <div className="glass-hud p-6">
+            <div className="flex items-center gap-2 mb-6">
+               <Zap size={14} className="text-[var(--accent-cyan)]" />
+               <span className="mono-data text-[10px] text-zinc-400">Grid Guardian</span>
+            </div>
+            
+            <div className="space-y-6">
+               <div className="flex justify-between items-end">
+                  <div>
+                    <span className="block text-[8px] mono-data text-zinc-500">Power Source</span>
+                    <span className="text-lg font-bold italic tracking-tight">{data.powerSource}</span>
+                  </div>
+                  <div className="h-2 w-16 bg-zinc-800 rounded-full overflow-hidden">
+                    <motion.div 
+                      className="h-full bg-[var(--accent-cyan)]" 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${data.energy.battery}%` }}
+                    />
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-white/5 border border-white/5 rounded-xl">
+                    <span className="block text-[8px] mono-data text-zinc-500">Voltage</span>
+                    <span className="text-md font-bold mono-data text-white">{data.energy.voltage}V</span>
+                  </div>
+                  <div className="p-3 bg-white/5 border border-white/5 rounded-xl">
+                    <span className="block text-[8px] mono-data text-zinc-500">Stability</span>
+                    <span className="text-md font-bold mono-data text-[var(--accent-cyan)]">STB</span>
+                  </div>
+               </div>
+            </div>
+          </div>
+
+          <div className="glass-hud p-6">
+            <span className="mono-data text-[10px] text-zinc-400 block mb-4 italic">Operational Protocols</span>
+            <div className="flex flex-col gap-2">
+               {[
+                 { id: 'Standard', icon: Shield },
+                 { id: 'Sleep', icon: Moon },
+                 { id: 'Duress', icon: AlertTriangle }
+               ].map(mode => (
+                 <button 
+                  key={mode.id}
+                  onClick={() => setMode(mode.id)}
+                  className={`flex items-center gap-4 p-3 rounded-xl transition-all border ${data.mode === mode.id ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)] text-[var(--accent-gold)]' : 'bg-transparent border-white/5 text-zinc-500 hover:text-white'}`}
+                 >
+                   <mode.icon size={16} />
+                   <span className="text-xs font-bold uppercase tracking-widest">{mode.id}</span>
+                 </button>
+               ))}
+            </div>
+          </div>
+
+          <div className="glass-hud p-6">
+            <span className="mono-data text-[10px] text-zinc-400 block mb-1">Quick Comms</span>
+            <form onSubmit={sendVoiceCommand} className="relative">
+               <input 
+                 value={voiceInput}
+                 onChange={e => setVoiceInput(e.target.value)}
+                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs focus:ring-1 focus:ring-[var(--accent-gold)] outline-none"
+                 placeholder="Command..."
+               />
+               <button type="submit" className="absolute right-3 top-3 text-[var(--accent-gold)]">
+                 <Send size={14} />
+               </button>
+            </form>
+          </div>
+
+        </div>
+
+        {/* Center: Digital Twin & Controls */}
+        <div className="col-span-12 lg:col-span-6 flex flex-col gap-6">
+          <DigitalTwinMockup />
+          
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+             {data.devices.map(dev => (
+               <DeviceHUDCard key={dev.id} device={dev} onToggle={() => toggleDevice(dev.id, dev.state)} />
+             ))}
+          </div>
+
+          <TelemetryStrip data={voltageHistory} />
+        </div>
+
+        {/* Right: Trust Console & Analytics */}
+        <div className="col-span-12 lg:col-span-3 flex flex-col gap-6">
+           
+           {/* The Trust Terminal */}
+           <div className="glass-hud flex flex-col h-[400px] border-dashed">
+              <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
+                <span className="mono-data text-[10px] text-[var(--accent-gold)] font-bold">Autonomous Decision Log</span>
+                <div className="w-2 h-2 rounded-full bg-[var(--accent-gold)] animate-pulse" />
+              </div>
+              <div className="p-4 flex-1 overflow-y-auto space-y-4 custom-scrollbar">
+                {trustLogs.length === 0 ? (
+                  <p className="text-[10px] text-zinc-600 font-mono py-4">SYSTEM_IDLE: Awaiting context vectors...</p>
+                ) : (
+                  trustLogs.map((log) => (
+                    <div 
+                      key={log.id} 
+                      className={`text-[11px] font-mono leading-relaxed ${log.message.includes('CRITICAL') ? 'text-red-400' : 'text-zinc-400'}`}
+                    >
+                      <span className="opacity-40 text-[9px] mr-2">[{new Date(log.timestamp).toLocaleTimeString([], { hour12: false })}]</span>
+                      {log.message}
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="p-4 border-t border-white/10 bg-black/40">
+                <span className="text-[8px] mono-data tech-text-dim">FRIDAY_CORE: Ready to intervene</span>
+              </div>
+           </div>
+
+           <div className="glass-hud p-6">
+              <span className="mono-data text-[10px] text-zinc-400 block mb-2 tracking-widest">Bridged Matrix Status</span>
+              <div className="flex items-center gap-4 p-3 bg-white/5 border border-white/10 rounded-xl">
+                 <div className={`indicator ${haStatus?.connected ? 'active' : ''}`} />
+                 <div className="flex-1">
+                   <span className="block text-[10px] font-black uppercase text-white">{haStatus?.hub}</span>
+                   <span className="text-[8px] mono-data tech-text-dim">{haStatus?.syncedDevices} Entities Linked</span>
+                 </div>
+                 <button onClick={syncHA} className="p-2 text-zinc-500 hover:text-white">
+                   <RefreshCw size={12} />
+                 </button>
+              </div>
+           </div>
+
+           <div className="glass-hud p-6 bg-gradient-to-br from-[var(--accent-gold)]/5 to-transparent">
+              <span className="mono-data text-[10px] text-zinc-400 block mb-4 uppercase">Load Shedding Impact</span>
+              <span className="block text-3xl font-black italic text-[var(--accent-gold)]">142.8 kWh</span>
+              <span className="text-[9px] mono-data text-zinc-500 tracking-tighter mt-1 block">Cumulative offset since activation</span>
+           </div>
+        </div>
+
+      </div>
+
       <AnimatePresence>
         {spatialPulseMessage && (
           <motion.div 
-            initial={{ opacity: 0, y: -50 }} 
-            animate={{ opacity: 1, y: 0 }} 
-            exit={{ opacity: 0, y: -50 }} 
-            className="fixed top-8 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 bg-[var(--accent)] text-black font-mono text-xs uppercase tracking-widest font-bold rounded-full shadow-2xl shadow-[var(--accent)]/30 border border-black"
+            initial={{ opacity: 0, scale: 0.8 }} 
+            animate={{ opacity: 1, scale: 1 }} 
+            exit={{ opacity: 0, scale: 0.8 }} 
+            className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] px-8 py-4 glass-hud bg-[var(--accent-gold)]/20 border-[var(--accent-gold)] text-[var(--accent-gold)] font-mono text-[10px] uppercase tracking-widest font-bold glow-gold"
           >
             {spatialPulseMessage}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Dynamic Sidebar / Quick HUD */}
-      <aside className="w-full lg:w-80 flex flex-col gap-6">
-        <div className="bento-card bg-zinc-900 border-none shadow-none flex-row items-center gap-4 py-4 rounded-full">
-          <div className="w-12 h-12 bg-[var(--accent)] rounded-full grid place-items-center text-black">
-            <Activity size={24} />
-          </div>
-          <div>
-            <h1 className="font-bold text-lg tracking-tight italic">Ujo JARVIS</h1>
-            <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest leading-none">V2.0 ALPHA</p>
-          </div>
-        </div>
-
-        {/* Operational Modes */}
-        <div className="bento-card">
-          <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest mb-4">Logical States</p>
-          <div className="flex flex-col gap-2">
-            {[
-              { id: 'Standard', icon: Shield },
-              { id: 'Sleep', icon: Moon },
-              { id: 'Manual Override', icon: Power }
-            ].map((mode) => (
-              <button
-                key={mode.id}
-                onClick={() => setMode(mode.id)}
-                className={`flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-medium transition-all ${
-                  data.mode === mode.id 
-                    ? 'bg-[var(--accent)] text-black' 
-                    : 'bg-zinc-800/50 text-zinc-400 hover:text-white'
-                }`}
-              >
-                <mode.icon size={18} />
-                {mode.id}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Energy HUD */}
-        <div className="bento-card bg-gradient-to-br from-zinc-900 to-black">
-          <div className="flex justify-between items-center mb-4">
-            <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest">Energy Pulse</p>
-            <div className="flex gap-1">
-              {['Grid', 'Inverter'].map(p => (
-                <button 
-                  key={p} 
-                  onClick={() => switchPower(p as any)}
-                  className={`text-[8px] px-2 py-1 rounded-md font-bold uppercase transition-all ${data.powerSource === p ? 'bg-[var(--accent)] text-black' : 'bg-zinc-800 text-zinc-500'}`}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="text-center p-3 bg-zinc-800/40 rounded-2xl">
-              <span className="block text-xl font-bold italic">{data.energy.battery}%</span>
-              <span className="text-[9px] tech-text-dim uppercase font-mono">Inverter</span>
-            </div>
-            <div className="text-center p-3 bg-zinc-800/40 rounded-2xl">
-              <span className="block text-xl font-bold italic">{data.energy.solar}kW</span>
-              <span className="text-[9px] tech-accent uppercase font-mono">Solar Gen</span>
-            </div>
-          </div>
-          
-          {/* Energy Armor */}
-          <div className="mt-4 p-4 bg-lime-500/5 border border-lime-500/20 rounded-2xl">
-             <div className="flex justify-between items-center mb-1">
-                <span className="text-[9px] font-mono tech-accent uppercase">Grid Armor Active</span>
-                <Shield size={10} className="tech-accent" />
-             </div>
-             <div className="flex justify-between items-end mb-2">
-                <span className="text-lg font-black italic">{data.energy.voltage}V</span>
-                <span className="text-[8px] font-mono text-lime-500 uppercase">{data.energy.status}</span>
-             </div>
-             <div className="h-12 w-full mt-2">
-               <ResponsiveContainer width="100%" height="100%">
-                 <LineChart data={voltageHistory}>
-                   <YAxis domain={['dataMin - 10', 'dataMax + 10']} hide />
-                   <Line type="monotone" dataKey="voltage" stroke="#84cc16" strokeWidth={2} dot={false} isAnimationActive={false} />
-                 </LineChart>
-               </ResponsiveContainer>
-             </div>
-          </div>
-
-          <div className="mt-4 p-3 border border-zinc-500/10 rounded-2xl bg-black/20">
-            <p className="text-[9px] italic leading-tight text-zinc-500">
-              "{data.energy.forecast}. Solar harvest restricted."
-            </p>
-          </div>
-        </div>
-
-        {/* HA Link HUD */}
-        <div className="bento-card">
-          <div className="flex justify-between items-center mb-4">
-            <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest">Bridge Matrix</p>
-            <Link size={14} className={haStatus?.connected ? 'tech-accent' : 'text-zinc-600'} />
-          </div>
-          <div className="flex items-center gap-4 bg-zinc-900/50 p-4 rounded-2xl border tech-border">
-             <div className={`indicator ${haStatus?.connected ? 'active' : ''}`} />
-             <div className="flex-1">
-               <span className="block text-xs font-bold uppercase">{haStatus?.hub}</span>
-               <span className="text-[9px] tech-text-dim uppercase font-mono">{haStatus?.syncedDevices} Entities Linked</span>
-             </div>
-             <button onClick={syncHA} className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-500">
-               <RefreshCw size={14} />
-             </button>
-          </div>
-        </div>
-
-          {/* House Health Score */}
-          <div className="bento-card">
-            <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest mb-4">House Health Score</p>
-            <div className="text-center">
-              <span className={`block text-4xl font-black italic ${data.houseScore! > 80 ? 'text-lime-400' : data.houseScore! > 60 ? 'text-yellow-400' : 'text-red-400'}`}>{data.houseScore || 92}</span>
-              <span className="text-[10px] uppercase tracking-wider font-mono text-zinc-500">Overall System Integrity</span>
-            </div>
-          </div>
-
-          <TrustControlPanel logs={data.trustLog || []} />
-      </aside>
-
-      {/* Main Grid View */}
-      <main className="flex-1 overflow-y-auto no-scrollbar pb-10">
-        <div className="bento-grid">
-          {/* JARVIS INPUT - SPAN 24 */}
-          <div className="grid-col-24 bento-card bg-zinc-900/50 border-2 border-[var(--accent-muted)] shadow-inner">
-             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-4">
-               <div className="flex items-center gap-4">
-                 <Activity size={18} className="tech-accent animate-pulse" />
-                 <h2 className="text-sm font-bold uppercase tracking-[0.2em] italic">Omni-Channel LLM Core</h2>
-                 <span className="px-2 py-1 bg-[var(--accent)] text-black text-[8px] font-bold uppercase rounded-md tracking-widest">Gemini Neural</span>
-               </div>
-               
-               <div className="flex items-center gap-2">
-                 <span className="text-[10px] tech-text-dim uppercase font-mono mr-2">BLE Vector:</span>
-                 <select 
-                   value={activeUser} 
-                   onChange={(e) => setActiveUser(e.target.value)}
-                   className="bg-zinc-800 text-xs px-3 py-1.5 rounded-lg border-none focus:ring-1 focus:ring-[var(--accent)]"
-                 >
-                   <option>Owner</option>
-                   <option>Guest (User B)</option>
-                   <option>Staff (User C)</option>
-                 </select>
-                 <select 
-                   value={activeZone} 
-                   onChange={(e) => setActiveZone(e.target.value)}
-                   className="bg-zinc-800 text-xs px-3 py-1.5 rounded-lg border-none focus:ring-1 focus:ring-[var(--accent)]"
-                 >
-                   <option>Living Room</option>
-                   <option>Kitchen</option>
-                   <option>Bedroom</option>
-                 </select>
-               </div>
-             </div>
-             <form onSubmit={sendVoiceCommand} className="flex gap-4">
-                <input 
-                  type="text"
-                  value={voiceInput}
-                  onChange={(e) => setVoiceInput(e.target.value)}
-                  placeholder="Ask Ujo anything or control the house..."
-                  className="flex-1 bg-black/40 border-none rounded-2xl px-6 py-4 text-sm focus:ring-2 focus:ring-[var(--accent)] transition-all"
-                />
-                <button type="submit" className="p-4 bg-[var(--accent)] text-black rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-lime-500/10 hover:opacity-90 transition-all">Submit Query</button>
-             </form>
-             <AnimatePresence>
-                {nlpResponse && (
-                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-4 pt-4 border-t tech-border text-[13px] font-mono tech-accent leading-relaxed italic whitespace-pre-wrap">
-                    {nlpResponse}
-                  </motion.div>
-                )}
-             </AnimatePresence>
-             <div className="mt-2 flex items-center justify-between opacity-50">
-               <span className="text-[8px] uppercase tracking-widest font-mono text-zinc-500">Live Context Engine: Gist Mode Active (Voice/WebSearch Grounded)</span>
-               <button onClick={() => setChatHistory([])} className="text-[8px] uppercase tracking-widest font-mono tech-accent hover:underline">Clear Memory</button>
-             </div>
-          </div>
-
-          {/* Context Sensors - SPAN 8 */}
-          <div className="grid-col-8 grid-row-2 bento-card bg-gradient-to-b from-zinc-900 to-transparent">
-             <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest mb-6">Environmental Awareness</p>
-             <div className="flex flex-col gap-4">
-                <div onClick={toggleLocation} className="flex items-center justify-between p-4 bg-zinc-800/40 rounded-3xl cursor-pointer hover:bg-zinc-800">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-zinc-900 rounded-2xl"><MapPin size={20} className={data.location === 'Home' ? 'tech-accent' : 'text-amber-500'} /></div>
-                    <div className="text-left">
-                      <p className="text-sm font-bold">{data.location}</p>
-                      <p className="text-[9px] tech-text-dim uppercase font-mono">Mobile Geofence</p>
-                    </div>
-                  </div>
-                  <ChevronRight size={16} className="tech-text-dim" />
-                </div>
-                
-                <div onClick={simulateMotion} className="flex items-center justify-between p-4 bg-zinc-800/40 rounded-3xl cursor-pointer hover:bg-zinc-800">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-zinc-900 rounded-2xl"><Eye size={20} className="text-blue-400" /></div>
-                    <div className="text-left">
-                      <p className="text-sm font-bold">Motion Scan</p>
-                      <p className="text-[9px] tech-text-dim uppercase font-mono">mmWave Sensing</p>
-                    </div>
-                  </div>
-                  <div className="indicator active" />
-                </div>
-
-                <div onClick={simulateHealthAlert} className="flex items-center justify-between p-4 bg-zinc-800/40 rounded-3xl cursor-pointer hover:bg-zinc-800">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-zinc-900 rounded-2xl"><Activity size={20} className="text-emerald-400" /></div>
-                    <div className="text-left">
-                      <p className="text-sm font-bold">940 PPM</p>
-                      <p className="text-[9px] tech-text-dim uppercase font-mono">CO2 Health Scan</p>
-                    </div>
-                  </div>
-                  <div className="indicator active" />
-                </div>
-             </div>
-
-             <div className="mt-8 pt-8 border-t border-zinc-800">
-                <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest mb-4">Voice Persona</p>
-                <div className="grid grid-cols-2 gap-2">
-                   {[
-                     { name: 'JARVIS', pitch: 0.8, rate: 0.95 },
-                     { name: 'FRIDAY', pitch: 1.2, rate: 1.1 },
-                     { name: 'BALANCED', pitch: 1.0, rate: 1.0 },
-                     { name: 'CALM', pitch: 0.6, rate: 0.8 }
-                   ].map(v => (
-                     <button 
-                       key={v.name}
-                       onClick={() => updateVoiceSetting(v.name, v.pitch, v.rate)}
-                       className={`px-3 py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${data.voice?.persona === v.name ? 'bg-[var(--accent)] text-black' : 'bg-zinc-800 text-zinc-500'}`}
-                     >
-                       {v.name}
-                     </button>
-                   ))}
-                </div>
-             </div>
-          </div>
-
-          {/* Device Matrix - SPAN 16 */}
-          <div className="grid-col-16 bento-card border-none bg-transparent p-0">
-             <div className="grid grid-cols-2 lg:grid-cols-2 gap-6 h-full">
-                {data.devices.map(dev => (
-                  <DeviceCard key={dev.id} device={dev} onToggle={() => toggleDevice(dev.id, dev.state)} />
-                ))}
-             </div>
-          </div>
-
-          {/* Security Profiles - SPAN 12 */}
-          <div className="grid-col-12 bento-card">
-              <div className="flex justify-between items-center mb-6">
-                <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest">Staff Access Matrix</p>
-                <Lock size={14} className="tech-text-dim" />
-              </div>
-              <div className="flex flex-col gap-3">
-                 <div className="flex items-center justify-between p-4 bg-zinc-800/30 rounded-3xl border tech-border">
-                    <div className="flex items-center gap-4">
-                       <div className="w-10 h-10 bg-zinc-700/50 rounded-full grid place-items-center font-bold">A</div>
-                       <div>
-                          <p className="text-xs font-bold italic">Abike (Cleaner)</p>
-                          <p className="text-[9px] tech-text-dim font-mono uppercase">Tuesdays • 10:00 - 14:00</p>
-                       </div>
-                    </div>
-                    <button onClick={simulateStaffAccess} className="px-3 py-1 bg-zinc-800 rounded-full text-[9px] font-bold uppercase tech-accent">Simulate Tap</button>
-                 </div>
-              </div>
-          </div>
-
-          {/* Debug Console - SPAN 12 */}
-          <div className="grid-col-12 bento-card bg-zinc-900/20 border-dashed border-zinc-800">
-             <div className="flex justify-between items-center mb-4">
-                <p className="text-[10px] font-mono tech-text-dim uppercase tracking-widest italic">Protocol Overrides</p>
-                <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold uppercase ${data?.subscriptionActive ? 'bg-lime-500/20 text-lime-500' : 'bg-red-500/20 text-red-500'}`}>
-                   {data?.subscriptionActive ? 'SaaS Pulse Active' : 'SaaS Pulse Offline'}
-                </div>
-             </div>
-             <div className="flex flex-wrap gap-2 text-[10px] font-mono">
-                <button onClick={triggerAnomaly} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-red-500 text-zinc-500 hover:text-red-500 transition-colors">FORCE_ANOMALY</button>
-                <button onClick={startTraining} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-[var(--accent)] text-zinc-500 hover:text-[var(--accent)] transition-colors">ENROLL_VOICE_BIOMETRICS</button>
-                <button onClick={checkSoftwareUpdate} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-blue-500 text-zinc-500 hover:text-blue-500 transition-colors">QUERY_SYSTEM_UPDATE</button>
-                <button onClick={simulatePredictive} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-emerald-500 text-zinc-500 hover:text-emerald-500 transition-colors">SIM_PREDICTIVE_MAINT</button>
-                <button onClick={() => speakResponse('Party Mode enabled. Follow-Me tracking suspended due to dense local occupancy.')} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-[var(--accent)] text-zinc-500 hover:text-[var(--accent)] transition-colors">SIM_CROWD_SCENE</button>
-                <button onClick={() => speakResponse('Night Mode active. Radar defaults to 15% warm lighting.')} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-[var(--accent)] text-zinc-500 hover:text-[var(--accent)] transition-colors">SIM_SLEEPWALKER</button>
-                <button onClick={() => speakResponse('Vocal tract shape matched via MFCC. Access granted. Pitch thresholding bypassed')} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-[var(--accent)] text-zinc-500 hover:text-[var(--accent)] transition-colors">SIM_DIVERSE_VOCAL_TRACT</button>
-                <button onClick={() => fetch('/api/system/simulate-tracking', { method: 'POST' })} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-[var(--accent)] text-zinc-500 hover:text-[var(--accent)] transition-colors">SIM_GHOSTING_SCENARIO</button>
-                <button onClick={async () => {
-                    const res = await fetch('/api/system/simulate-coadmin', { method: 'POST'});
-                    const json = await res.json();
-                    speakResponse(json.message);
-                }} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-orange-500 text-zinc-500 hover:text-orange-500 transition-colors">SIM_COADMIN_CONFLICT</button>
-                <button onClick={() => dispatchVendor('diesel')} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-violet-500 text-zinc-500 hover:text-violet-500 transition-colors">TEST_WHATSAPP_DIESEL</button>
-                <button onClick={generateGuestQR} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-pink-500 text-zinc-500 hover:text-pink-500 transition-colors">GEN_TIME_BOMBED_GUEST_QR</button>
-                <button onClick={toggleSubscription} className="px-3 py-1 border border-zinc-800 rounded-lg hover:border-amber-500 text-zinc-500 hover:text-amber-500 transition-colors">TOGGLE_SAAS_SUBSCRIPTION</button>
-                {data.duressActive && (
-                  <div className="px-3 py-1 bg-red-500/20 text-red-500 border border-red-500 rounded-lg animate-pulse font-black uppercase">
-                    DURESS_PROTOCOL_ACTIVE
-                  </div>
-                )}
-             </div>
-          </div>
-        </div>
-      </main>
-
       {/* Voice Training Overlay */}
       <AnimatePresence>
         {isTraining && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] bg-black/95 backdrop-blur-2xl grid place-items-center p-6">
             <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="max-w-md w-full bento-card text-center items-center py-12">
-               <div className="w-24 h-24 bg-[var(--accent)] rounded-full grid place-items-center mb-8 shadow-2xl shadow-lime-500/20">
-                  <Mic size={40} className="text-black animate-pulse" />
+               <div className="w-24 h-24 bg-[var(--accent-gold)]/20 border border-[var(--accent-gold)]/30 rounded-full grid place-items-center mb-8 shadow-2xl shadow-yellow-500/10">
+                  <Mic size={40} className="text-[var(--accent-gold)] animate-pulse" />
                </div>
                <h3 className="text-2xl font-black italic uppercase tracking-tighter mb-2">Voice Biometrics</h3>
                <p className="text-zinc-500 text-sm mb-8 font-mono uppercase tracking-widest">Step {trainingStep} of 3 • Local MFCC Extraction</p>
@@ -1052,7 +1010,7 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
                  {trainingStep === 3 && `"Ujo, turn off the living room lights."`}
                </p>
 
-               <button onClick={nextTrainingStep} className="w-full py-5 bg-[var(--accent)] text-black font-black uppercase tracking-widest rounded-[2rem] hover:scale-[1.02] transition-all">
+               <button onClick={nextTrainingStep} className="w-full py-5 bg-[var(--accent-gold)] text-black font-black uppercase tracking-widest rounded-xl hover:scale-[1.02] transition-all">
                  Record Sample
                </button>
             </motion.div>
@@ -1064,14 +1022,14 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
       <AnimatePresence>
         {showKeypad && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-xl grid place-items-center p-6">
-             <motion.div initial={{ y: 20 }} animate={{ y: 0 }} className="max-w-xs w-full bento-card items-center p-8">
-                <Lock size={32} className="tech-accent mb-6" />
-                <h3 className="text-xl font-black italic uppercase tracking-tighter mb-1">Secure Unlock</h3>
+             <motion.div initial={{ y: 20 }} animate={{ y: 0 }} className="max-w-xs w-full glass-hud items-center p-8">
+                <Lock size={32} className="text-[var(--accent-gold)] mb-6 mx-auto" />
+                <h3 className="text-xl font-black italic uppercase tracking-tighter mb-1 text-center">Secure Unlock</h3>
                 <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-widest mb-8 text-center">4-Digit Cryptographic Code Required</p>
                 
-                <div className="flex gap-3 mb-8">
+                <div className="flex gap-3 mb-8 justify-center">
                   {[1, 2, 3, 4].map(i => (
-                    <div key={i} className={`w-3 h-3 rounded-full border border-zinc-700 ${pinBuffer.length >= i ? 'bg-[var(--accent)] border-[var(--accent)]' : ''}`} />
+                    <div key={i} className={`w-3 h-3 rounded-full border border-zinc-700 ${pinBuffer.length >= i ? 'bg-[var(--accent-gold)] border-[var(--accent-gold)]' : ''}`} />
                   ))}
                 </div>
 
@@ -1080,7 +1038,7 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
                      <button 
                        key={val} 
                        onClick={() => typeof val === 'number' && handleKeypadPress(val.toString())}
-                       className="aspect-square bg-zinc-800 rounded-2xl grid place-items-center font-black text-lg hover:bg-[var(--accent)] hover:text-black transition-all"
+                       className="aspect-square bg-white/5 border border-white/5 rounded-xl grid place-items-center font-black text-lg hover:bg-[var(--accent-gold)] hover:text-black transition-all"
                      >
                        {val}
                      </button>
@@ -1088,22 +1046,8 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
                 </div>
 
                 <div className="flex gap-4 w-full">
-                  <button onClick={() => { setShowKeypad(false); setPinBuffer(''); }} className="flex-1 py-4 bg-zinc-800 rounded-2xl font-bold uppercase text-[10px] tracking-widest">Cancel</button>
-                  <button onClick={submitPin} disabled={pinBuffer.length < 4} className="flex-1 py-4 bg-[var(--accent)] text-black rounded-2xl font-black uppercase text-[10px] tracking-widest disabled:opacity-30">Authorize</button>
-                </div>
-
-                <div className="mt-8 border-t border-zinc-800 pt-6 w-full flex flex-col items-center">
-                  <button 
-                    onClick={() => {
-                       speakResponse("Offline biometric identity verified. Master admin confirmed.");
-                       setShowKeypad(false);
-                       setPinBuffer('');
-                    }}
-                    className="flex flex-col items-center gap-3 text-zinc-500 hover:text-[var(--accent)] transition-all group"
-                  >
-                     <Scan size={32} className="group-hover:scale-110 transition-transform" />
-                     <span className="text-[9px] font-mono uppercase tracking-[0.2em]">Scan Fingerprint (Offline Fallback)</span>
-                  </button>
+                  <button onClick={() => { setShowKeypad(false); setPinBuffer(''); }} className="flex-1 py-4 bg-white/5 border border-white/5 rounded-xl font-bold uppercase text-[10px] tracking-widest">Cancel</button>
+                  <button onClick={submitPin} disabled={pinBuffer.length < 4} className="flex-1 py-4 bg-[var(--accent-gold)] text-black rounded-xl font-black uppercase text-[10px] tracking-widest disabled:opacity-30">Authorize</button>
                 </div>
              </motion.div>
           </motion.div>
@@ -1117,21 +1061,22 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
             initial={{ opacity: 0 }} 
             animate={{ opacity: 1 }} 
             exit={{ opacity: 0 }} 
-            className="fixed inset-0 z-[100] bg-[var(--bg)] grid place-items-center p-6"
+            className="fixed inset-0 z-[100] bg-[#050505] grid place-items-center p-6"
           >
             <div className="max-w-2xl w-full">
               {onboardingStep === 'intro' && (
                 <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="text-center flex flex-col items-center">
-                  <div className="w-20 h-20 bg-[var(--accent)] rounded-[2rem] grid place-items-center mb-8 shadow-2xl shadow-lime-500/20">
+                  <div className="w-20 h-20 bg-[var(--accent-gold)] rounded-2xl grid place-items-center mb-8 shadow-2xl shadow-yellow-500/20">
                     <Activity size={32} className="text-black" />
                   </div>
                   <h2 className="text-4xl font-black italic uppercase tracking-tighter mb-4">Welcome to Ujo OS</h2>
-                  <p className="text-zinc-400 text-lg mb-10 leading-relaxed">
-                    I am Ujo, your intelligent home companion. I protect your power, secure your data, and anticipate your needs.
+                  <p className="text-zinc-400 text-lg mb-10 leading-relaxed font-mono">
+                    NEURAL_LINK: PENDING<br/>
+                    AWAITING_MASTER_REGISTRATION
                   </p>
                   <button 
                     onClick={handleStartSetup}
-                    className="group flex items-center gap-4 px-10 py-6 bg-[var(--accent)] text-black rounded-[2.5rem] font-black uppercase tracking-widest hover:scale-105 transition-all shadow-xl shadow-lime-500/10"
+                    className="group flex items-center gap-4 px-10 py-6 bg-[var(--accent-gold)] text-black rounded-xl font-black uppercase tracking-widest hover:scale-105 transition-all shadow-xl shadow-yellow-500/10"
                   >
                     Initiate Neural Link <ChevronRight size={24} className="group-hover:translate-x-1 transition-transform" />
                   </button>
@@ -1139,13 +1084,13 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
               )}
 
               {onboardingStep === 'scanning' && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bento-card p-10 bg-zinc-900">
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-hud p-10">
                   <div className="flex justify-between items-center mb-10">
                     <div>
                       <h3 className="text-2xl font-black italic uppercase tracking-tight">Integrity Scan</h3>
-                      <p className="text-xs font-mono tech-accent uppercase tracking-widest">Probing Z-Bridge Matrix...</p>
+                      <p className="text-xs font-mono text-[var(--accent-gold)] uppercase tracking-widest">Probing Z-Bridge Matrix...</p>
                     </div>
-                    <RefreshCw size={24} className="animate-spin text-[var(--accent)]" />
+                    <RefreshCw size={24} className="animate-spin text-[var(--accent-gold)]" />
                   </div>
                   
                   <div className="flex flex-col gap-4">
@@ -1155,15 +1100,15 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
                         <motion.div 
                           key={device.id}
                           animate={{ opacity: isScanned ? 1 : 0.3 }}
-                          className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-2xl border tech-border"
+                          className={`flex items-center justify-between p-4 bg-white/5 rounded-xl border ${isScanned ? 'border-[var(--accent-gold)]/40' : 'border-white/5'}`}
                         >
                           <div className="flex items-center gap-4">
-                            <div className={`p-2 rounded-lg ${isScanned ? 'bg-lime-500/20 text-lime-500' : 'bg-zinc-800 text-zinc-500'}`}>
+                            <div className={`p-2 rounded-lg ${isScanned ? 'bg-[var(--accent-gold)]/20 text-[var(--accent-gold)]' : 'bg-zinc-800 text-zinc-500'}`}>
                               <Link size={16} />
                             </div>
                             <span className="text-sm font-bold">{device.name}</span>
                           </div>
-                          <span className={`text-[10px] font-mono uppercase ${isScanned ? 'text-lime-500' : 'text-zinc-600'}`}>
+                          <span className={`text-[10px] font-mono uppercase ${isScanned ? 'text-[var(--accent-gold)]' : 'text-zinc-600'}`}>
                             {isScanned ? 'Verified' : 'Pending'}
                           </span>
                         </motion.div>
@@ -1175,18 +1120,17 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
 
               {onboardingStep === 'complete' && (
                 <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center flex flex-col items-center">
-                  <div className="w-24 h-24 bg-lime-500 rounded-full grid place-items-center mb-8 shadow-2xl shadow-lime-500/40">
+                  <div className="w-24 h-24 bg-[var(--accent-gold)] rounded-full grid place-items-center mb-8 shadow-2xl shadow-yellow-500/40">
                     <Shield size={40} className="text-black" />
                   </div>
                   <h2 className="text-4xl font-black italic uppercase tracking-tighter mb-4">Protection Active</h2>
                   <p className="text-zinc-400 text-lg mb-10 leading-relaxed font-mono">
                     NEURAL_LINK: STABLE<br/>
-                    SECURITY_ARMOR: ONLINE<br/>
-                    GREETING: COMPLETE
+                    SECURITY_ARMOR: ONLINE
                   </p>
                   <button 
                     onClick={() => setShowOnboarding(false)}
-                    className="px-12 py-6 border-2 border-[var(--accent)] text-[var(--accent)] rounded-[2.5rem] font-black uppercase tracking-widest hover:bg-[var(--accent)] hover:text-black transition-all shadow-xl shadow-lime-500/5"
+                    className="px-12 py-6 border-2 border-[var(--accent-gold)] text-[var(--accent-gold)] rounded-xl font-black uppercase tracking-widest hover:bg-[var(--accent-gold)] hover:text-black transition-all shadow-xl shadow-yellow-500/5"
                   >
                     Enter Command Center
                   </button>
@@ -1197,35 +1141,26 @@ If they speak contextually (e.g. "turn on the light here"), infer the device fro
         )}
       </AnimatePresence>
 
-      {/* HITL Alerts Overlay - REFINED */}
+      {/* HITL Alerts Overlay */}
       <AnimatePresence>
         {data.alerts.length > 0 && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl grid place-items-center p-6">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl grid place-items-center p-6 text-center">
             {data.alerts.map((alert) => (
-              <motion.div key={alert.id} initial={{ scale: 0.9, y: 30 }} animate={{ scale: 1, y: 0 }} className="max-w-lg w-full bento-card border-t-8 border-t-[var(--alert-red)] shadow-2xl shadow-red-500/20 bg-zinc-900">
-                <div className="flex items-start gap-6 mb-8">
-                  <div className="p-4 bg-red-500/10 rounded-[2rem] text-red-500 shadow-lg">
-                    {alert.type === 'vendor' ? <RefreshCw size={40} className="animate-spin-slow" /> : 
-                     alert.type === 'system' ? <Download size={40} className="animate-bounce" /> :
-                     <AlertTriangle size={40} />}
+              <motion.div key={alert.id} initial={{ scale: 0.9, y: 30 }} animate={{ scale: 1, y: 0 }} className="max-w-lg w-full glass-hud border-t-8 border-t-[var(--alert-red)] p-10">
+                <div className="flex flex-col items-center mb-8">
+                  <div className="p-4 bg-red-500/10 rounded-full text-red-500 shadow-lg mb-6">
+                    <AlertTriangle size={48} />
                   </div>
-                  <div className="flex-1">
-                    <h3 className="text-2xl font-black uppercase tracking-tight italic mb-2">{alert.title}</h3>
-                    <p className="text-[10px] font-mono text-red-500 uppercase tracking-[0.3em] font-bold mb-4">Intervention Type: {alert.type}</p>
-                    <p className="text-zinc-200 text-lg leading-relaxed font-medium">"{alert.message}"</p>
-                  </div>
+                  <h3 className="text-2xl font-black uppercase tracking-tight italic mb-2">{alert.title}</h3>
+                  <p className="mono-data text-[10px] text-red-500 mb-6">Intervention Required</p>
+                  <p className="text-zinc-200 text-lg leading-relaxed font-medium">"{alert.message}"</p>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-4">
-                  <button onClick={() => confirmAlert(alert.id, 'Ignore')} className="py-5 px-6 rounded-[2rem] font-bold text-zinc-500 bg-zinc-800/50 hover:bg-zinc-800 transition-all uppercase text-[10px] tracking-widest">Decline Logic</button>
-                  <button onClick={() => confirmAlert(alert.id, 'Confirm')} className="py-5 px-6 rounded-[2rem] font-black bg-[var(--alert-red)] text-white hover:scale-[1.02] transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3 shadow-xl shadow-red-500/20">
-                    Confirm Action <ChevronRight size={18} />
+                  <button onClick={() => confirmAlert(alert.id, 'Ignore')} className="py-5 px-6 rounded-xl font-bold text-zinc-500 bg-white/5 hover:bg-white/10 transition-all uppercase text-[10px] tracking-widest">Decline</button>
+                  <button onClick={() => confirmAlert(alert.id, 'Confirm')} className="py-5 px-6 rounded-xl font-black bg-[var(--alert-red)] text-white hover:scale-[1.02] transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3">
+                    Confirm Action
                   </button>
-                </div>
-                
-                <div className="mt-8 pt-6 border-t border-zinc-800 flex justify-between items-center text-[9px] font-mono text-zinc-500 italic">
-                  <span className="flex items-center gap-2"><Send size={10} /> Localized Decision Gate</span>
-                  <span>ID: {alert.id}</span>
                 </div>
               </motion.div>
             ))}

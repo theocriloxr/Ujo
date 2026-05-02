@@ -7,17 +7,19 @@ import { GoogleGenAI } from "@google/genai";
  * for intercom communication between family members and staff.
  */
 export class TranslatorService {
-  private genAI: GoogleGenAI;
+  private genAI: GoogleGenAI | null = null;
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    if (apiKey) {
+      this.genAI = new GoogleGenAI({ apiKey });
+    } else {
       console.warn("GEMINI_API_KEY missing - Translator will use fallback.");
     }
-    this.genAI = new GoogleGenAI({ apiKey: apiKey || "" });
   }
 
   public async translateToDialect(text: string, dialect: 'PIDGIN' | 'HAUSA' | 'YORUBA' | 'IGBO' = 'PIDGIN'): Promise<string> {
+    if (!this.genAI) return text;
     try {
       const prompt = `
         You are Ujo OS, a smart home assistant in Nigeria. 
