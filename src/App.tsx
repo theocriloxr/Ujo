@@ -249,7 +249,7 @@ const TelemetryStrip = ({ history }: { history: any[] }) => {
   );
 };
 
-const VoiceOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, voiceConfidence }: { 
+const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, voiceConfidence }: { 
   isOpen: boolean, 
   onClose: () => void, 
   onSend: (e: React.FormEvent) => void, 
@@ -260,59 +260,81 @@ const VoiceOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, vo
 }) => (
   <AnimatePresence>
     {isOpen && (
-      <>
+      <motion.div 
+        initial={{ opacity: 0 }} 
+        animate={{ opacity: 1 }} 
+        exit={{ opacity: 0 }} 
+        className="fixed inset-0 bg-black/95 backdrop-blur-2xl z-[200] flex flex-col items-center justify-center p-6 text-center"
+      >
+        <button onClick={onClose} className="absolute top-10 right-10 text-zinc-500 hover:text-white p-4">
+           <VolumeX size={32} />
+        </button>
+
         <motion.div 
-          initial={{ opacity: 0 }} 
-          animate={{ opacity: 1 }} 
-          exit={{ opacity: 0 }} 
-          onClick={onClose}
-          className="fixed inset-0 bg-black/60 backdrop-blur-md z-[100]" 
-        />
-        <motion.div 
-          initial={{ y: "100%" }}
-          animate={{ y: 0 }}
-          exit={{ y: "100%" }}
-          transition={{ type: "spring", damping: 25, stiffness: 200 }}
-          className="fixed bottom-0 left-0 right-0 z-[101] p-6 lg:p-10 pointer-events-none"
+          animate={{ 
+            scale: [1, 1.1, 1],
+            boxShadow: ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]
+          }}
+          transition={{ duration: 2, repeat: Infinity }}
+          className="w-32 h-32 rounded-full bg-[var(--accent-gold)]/10 border-2 border-[var(--accent-gold)] flex items-center justify-center mb-10"
         >
-          <div className="max-w-3xl mx-auto glass-hud p-8 pointer-events-auto border-t-2 border-[var(--accent-gold)]/30 rounded-t-3xl">
-            <div className="mb-6 flex items-center justify-between">
-              <div className="flex flex-col">
-                <span className="mono-data text-[10px] text-[var(--accent-gold)] tracking-widest uppercase mb-1">Room-Aware Routing: {activeZone} Mic</span>
-                <div className="flex items-center gap-2">
-                   <div className="w-16 h-1 bg-white/10 rounded-full overflow-hidden">
-                      <motion.div 
-                        initial={{ width: 0 }}
-                        animate={{ width: `${voiceConfidence}%` }}
-                        className="h-full bg-[var(--accent-gold)]"
-                      />
-                   </div>
-                   <span className="mono-data text-[8px] text-zinc-500">VOICE_AUTH: {voiceConfidence.toFixed(0)}%</span>
-                </div>
-              </div>
-              <span className="mono-data text-[8px] text-zinc-500">VOICE_TOKEN_ACTIVE</span>
-            </div>
-            <div className="flex items-center gap-6">
-              <div className="w-16 h-16 rounded-full bg-[var(--accent-gold)]/10 border border-[var(--accent-gold)]/20 flex items-center justify-center animate-pulse">
-                <Mic className="text-[var(--accent-gold)]" size={32} />
-              </div>
-              <form onSubmit={onSend} className="flex-1 flex gap-4">
-                <input 
-                  autoFocus
-                  placeholder="Ask something..."
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-6 py-4 text-white focus:outline-none focus:ring-1 focus:ring-[var(--accent-gold)] font-mono text-sm"
-                />
-                <button type="submit" className="bg-[var(--accent-gold)] text-black px-8 py-4 rounded-xl font-black uppercase text-xs tracking-widest hover:scale-105 transition-all">
-                  <Send size={18} />
-                </button>
-              </form>
-            </div>
-            <p className="mt-6 text-center text-zinc-500 mono-data text-[8px] tracking-[0.4em]">LISTENING_ACTIVE • ESC_TO_CANCEL</p>
-          </div>
+           <Mic size={48} className="text-[var(--accent-gold)]" />
         </motion.div>
-      </>
+
+        <div className="max-w-2xl w-full">
+           <div className="flex flex-col items-center gap-4 mb-12">
+              <span className="mono-data text-xs text-[var(--accent-gold)] tracking-[0.5em] uppercase">Listening in {activeZone}</span>
+              <div className="flex items-center gap-4 w-full max-w-sm">
+                 <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+                    <motion.div 
+                      initial={{ width: 0 }}
+                      animate={{ width: `${voiceConfidence}%` }}
+                      className="h-full bg-[var(--accent-gold)]"
+                    />
+                 </div>
+                 <span className="mono-data text-[10px] text-zinc-500">AUTH_{voiceConfidence.toFixed(0)}%</span>
+              </div>
+           </div>
+
+           <form onSubmit={onSend} className="relative group">
+              <input 
+                autoFocus
+                placeholder="Declare command..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                className="w-full bg-transparent border-b-2 border-white/20 px-4 py-8 text-3xl font-black italic text-white text-center focus:outline-none focus:border-[var(--accent-gold)] transition-all placeholder:text-zinc-800"
+              />
+              <motion.div 
+                animate={{ opacity: [0.2, 0.5, 0.2] }}
+                transition={{ duration: 1.5, repeat: Infinity }}
+                className="absolute inset-x-0 -bottom-0.5 h-0.5 bg-[var(--accent-gold)] blur-sm pointer-events-none opacity-0 group-focus-within:opacity-100" 
+              />
+           </form>
+
+           <div className="mt-12 flex flex-wrap justify-center gap-4">
+              {["Set lights to 20%", "Arm security", "Find my phone"].map(cmd => (
+                <button 
+                  key={cmd}
+                  onClick={() => { setInput(cmd); }}
+                  className="px-4 py-2 rounded-full bg-white/5 border border-white/10 text-[10px] font-mono text-zinc-500 hover:text-[var(--accent-gold)] hover:border-[var(--accent-gold)]/30 transition-all"
+                >
+                   {cmd}
+                </button>
+              ))}
+           </div>
+        </div>
+        
+        <div className="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-10 opacity-30">
+           <div className="flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              <span className="mono-data text-[8px] uppercase tracking-widest text-zinc-400">Audio HW Link: Nominal</span>
+           </div>
+           <div className="flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+              <span className="mono-data text-[8px] uppercase tracking-widest text-zinc-400">Context Buffering: 0.2ms</span>
+           </div>
+        </div>
+      </motion.div>
     )}
   </AnimatePresence>
 );
@@ -449,6 +471,7 @@ export default function App() {
   const [voltageHistory, setVoltageHistory] = useState<{ time: string, voltage: number }[]>([]);
   const [voiceInput, setVoiceInput] = useState('');
   const [nlpResponse, setNlpResponse] = useState<string | null>(null);
+  const [trustScore, setTrustScore] = useState(85);
   const [activeZone, setActiveZone] = useState('Living Room');
   const [activeUser, setActiveUser] = useState('Owner');
   const [chatHistory, setChatHistory] = useState<any[]>([]);
@@ -487,6 +510,10 @@ export default function App() {
       type
     };
     setTrustLogs(prev => [log, ...prev].slice(0, 10));
+
+    // Update Trust Score
+    const scoreMap = { success: 1, warning: -2, info: 0, error: -5 };
+    setTrustScore(prev => Math.min(100, Math.max(0, prev + scoreMap[type])));
   };
 
   useEffect(() => {
@@ -509,8 +536,26 @@ export default function App() {
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    
+    // System Health Monitoring Agent
+    const healthCheck = setInterval(() => {
+      if (!data) return;
+      data.devices.forEach(dev => {
+        if (dev.status === 'ERROR' || dev.status === 'OFFLINE') {
+          const hasAlert = data.alerts.some(a => a.message.includes(dev.name));
+          if (!hasAlert) {
+            addTrustLog(`CRITICAL: ${dev.name} node heartbeat lost. Latency threshold exceeded.`, 'error');
+            speakResponse(`Alert: ${dev.name} is unresponsive. Initiating Lazarus background diagnostic.`);
+          }
+        }
+      });
+    }, 15000);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      clearInterval(healthCheck);
+    };
+  }, [data]);
 
   const initAmbientSound = () => {
     if (ambientAudio) return;
@@ -695,6 +740,58 @@ export default function App() {
     fetchStates();
   }, []);
 
+  const sendVoiceCommand = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!voiceInput.trim()) return;
+
+    // Simulate voice confidence processing
+    const confidence = 85 + Math.random() * 14;
+    setVoiceConfidence(confidence);
+    setIsVoiceVerified(true);
+
+    try {
+      const response = await fetch('/api/nlp-parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: voiceInput, 
+          room: activeZone,
+          securityFlags: { voiceVerified: true, phonePresent: isPhonePresent }
+        })
+      });
+
+      const result = await response.json();
+      setNlpResponse(result.response);
+      addTrustLog(`NLP: Command processed (${confidence.toFixed(0)}% confidence). ${result.response}`, result.success ? 'success' : 'info');
+      
+      if (result.vaultRequired) {
+        setVaultAction(voiceInput);
+        setShowVaultAuth(true);
+      }
+
+      speakResponse(result.response);
+      setVoiceInput('');
+      setShowVoiceOverlay(false);
+      setTimeout(() => setNlpResponse(null), 10000);
+    } catch (e) {
+      addTrustLog("Voice link handshake failed", "error");
+      speakResponse("System link failed.");
+    }
+  };
+
+  const switchPowerSource = async (source: string) => {
+    try {
+      await fetch('/api/power-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source })
+      });
+      addTrustLog(`Power source manually switched to ${source}`, 'info');
+    } catch (e) {
+      addTrustLog("Failed to switch power source", "error");
+    }
+  };
+  
   const startTraining = () => {
     setIsTraining(true);
     setTrainingStep(1);
@@ -928,47 +1025,6 @@ export default function App() {
     await fetch('/api/anomaly', { method: 'POST' });
   };
 
-  const sendVoiceCommand = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!voiceInput.trim()) return;
-    
-    // Simulate voice confidence processing
-    const confidence = 85 + Math.random() * 14;
-    setVoiceConfidence(confidence);
-    setIsVoiceVerified(true);
-    addTrustLog(`Voice input detected: confidence ${confidence.toFixed(1)}%`, 'info');
-
-    try {
-      const res = await fetch('/api/nlp-parse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          text: voiceInput, 
-          room: activeZone,
-          securityFlags: {
-            voiceVerified: true,
-            phonePresent: isPhonePresent
-          }
-        }),
-      });
-      const resData = await res.json();
-      
-      if (resData.vaultRequired) {
-        setVaultAction(voiceInput);
-        setShowVaultAuth(true);
-        speakResponse(resData.response);
-      } else {
-        speakResponse(resData.response);
-        setNlpResponse(resData.response);
-        setTimeout(() => setNlpResponse(null), 10000);
-      }
-      
-      setVoiceInput('');
-    } catch (error) {
-      console.error('NLP Error:', error);
-      speakResponse("Cognitive link interrupted.");
-    }
-  };
 
   const handleVaultAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1232,6 +1288,17 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-8">
+           <div className="flex flex-col items-center gap-2">
+              <div className="text-[var(--accent-gold)] font-mono text-[8px] tracking-widest uppercase">System Trust</div>
+              <div className="text-2xl font-black italic text-white leading-none">{trustScore}%</div>
+              <div className="w-20 h-1 bg-white/10 rounded-full overflow-hidden">
+                 <motion.div 
+                   animate={{ width: `${trustScore}%` }}
+                   className={`h-full ${trustScore > 70 ? 'bg-green-500' : trustScore > 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                 />
+              </div>
+           </div>
+
            <div className="flex flex-col items-end">
               <span className="mono-data text-[10px] text-zinc-400">{activeUser} Matrix</span>
               <span className="text-xs font-bold text-white italic capitalize">{data.location}</span>
@@ -1254,34 +1321,57 @@ export default function App() {
         <div className="col-span-12 lg:col-span-3 flex flex-col gap-6">
           
           <div className="glass-hud p-6">
-            <div className="flex items-center gap-2 mb-6">
-               <Zap size={14} className="text-[var(--accent-cyan)]" />
-               <span className="mono-data text-[10px] text-zinc-400">Grid Guardian</span>
+            <div className="flex items-center justify-between mb-6">
+               <div className="flex items-center gap-2">
+                  <Zap size={14} className="text-[var(--accent-gold)]" />
+                  <span className="mono-data text-[10px] text-zinc-400">Grid Guardian</span>
+               </div>
+               {data.powerSource === 'INVERTER' && (
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-orange-500/20 border border-orange-500/30 rounded text-[7px] text-orange-500 font-bold animate-pulse">
+                     AUTO_SHEDDING_ACTIVE
+                  </div>
+               )}
+               {data.energy.battery < 20 && (
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-red-500/20 border border-red-500/30 rounded text-[7px] text-red-500 font-bold animate-pulse">
+                     CRITICAL_LOAD
+                  </div>
+               )}
             </div>
             
-            <div className="space-y-6">
-               <div className="flex justify-between items-end">
-                  <div>
-                    <span className="block text-[8px] mono-data text-zinc-500">Power Source</span>
-                    <span className="text-lg font-bold italic tracking-tight">{data.powerSource}</span>
-                  </div>
-                  <div className="h-2 w-16 bg-zinc-800 rounded-full overflow-hidden">
-                    <motion.div 
-                      className="h-full bg-[var(--accent-cyan)]" 
-                      initial={{ width: 0 }}
-                      animate={{ width: `${data.energy.battery}%` }}
-                    />
-                  </div>
+            <div className="flex flex-col gap-6">
+               <div className="flex gap-2">
+                  {['MAINS', 'INVERTER', 'GENERATOR'].map(src => (
+                    <button 
+                       key={src}
+                       onClick={() => switchPowerSource(src)}
+                       className={`flex-1 p-2 rounded-lg border text-[7px] font-black uppercase transition-all ${data.powerSource === src ? 'bg-[var(--accent-gold)] text-black border-[var(--accent-gold)]' : 'bg-white/5 border-white/10 text-zinc-500 hover:text-white'}`}
+                    >
+                       {src}
+                    </button>
+                  ))}
                </div>
 
                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-3 bg-white/5 border border-white/5 rounded-xl">
-                    <span className="block text-[8px] mono-data text-zinc-500">Voltage</span>
-                    <span className="text-md font-bold mono-data text-white">{data.energy.voltage}V</span>
+                  <div className="flex flex-col gap-1">
+                     <span className="mono-data text-[8px] text-zinc-500 uppercase">Input Feed</span>
+                     <span className="text-xs font-bold text-white uppercase">{data.energy.grid === 'Connected' ? 'STABLE' : 'UNSTABLE'}</span>
                   </div>
-                  <div className="p-3 bg-white/5 border border-white/5 rounded-xl">
-                    <span className="block text-[8px] mono-data text-zinc-500">Stability</span>
-                    <span className="text-md font-bold mono-data text-[var(--accent-cyan)]">STB</span>
+                  <div className="flex flex-col gap-1 items-end">
+                     <span className="mono-data text-[8px] text-zinc-500 uppercase">Load Status</span>
+                     <span className={`text-xs font-bold tracking-widest ${data.mode === 'Sleep' ? 'text-green-400' : 'text-zinc-300'}`}>{data.mode === 'Sleep' ? 'OPTIMIZED' : 'STANDARD'}</span>
+                  </div>
+               </div>
+
+               <div className="space-y-2">
+                  <div className="flex justify-between items-center text-[8px] mono-data uppercase">
+                     <span className="text-zinc-500">Storage Bank</span>
+                     <span className={data.energy.battery > 50 ? 'text-white' : 'text-red-400'}>{data.energy.battery}%</span>
+                  </div>
+                  <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                     <motion.div 
+                       animate={{ width: `${data.energy.battery}%` }}
+                       className={`h-full ${data.energy.battery > 50 ? 'bg-[var(--accent-gold)]' : 'bg-red-500'} shadow-[0_0_10px_rgba(250,204,21,0.3)]`}
+                     />
                   </div>
                </div>
             </div>
@@ -1565,13 +1655,10 @@ export default function App() {
         <Mic size={28} />
       </button>
 
-      <VoiceOverlay 
+      <VoiceCommandOverlay 
         isOpen={showVoiceOverlay} 
         onClose={() => setShowVoiceOverlay(false)}
-        onSend={(e) => {
-          sendVoiceCommand(e);
-          setShowVoiceOverlay(false);
-        }}
+        onSend={sendVoiceCommand}
         input={voiceInput}
         setInput={setVoiceInput}
         activeZone={activeZone}
