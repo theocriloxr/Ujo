@@ -25,6 +25,8 @@ import {
   Battery,
   QrCode,
   Check,
+  CheckCircle,
+  Wind,
   ShieldAlert,
   Sparkles,
   Search,
@@ -207,9 +209,9 @@ const TelemetryStrip = ({ history }: { history: any[] }) => {
         <motion.div 
           animate={{ x: mouseX * 5, y: mouseY * 3 }}
           transition={{ type: "spring", damping: 25, stiffness: 120 }}
-          className="h-12 w-full mt-2"
+          className="h-12 w-full mt-2 relative min-h-[48px]"
         >
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="99%" height="100%" minHeight={48}>
             <LineChart data={chartsData}>
               <Line type="step" dataKey="voltage" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             </LineChart>
@@ -224,9 +226,9 @@ const TelemetryStrip = ({ history }: { history: any[] }) => {
         <motion.div 
           animate={{ x: mouseX * -3, y: mouseY * 6 }}
           transition={{ type: "spring", damping: 25, stiffness: 120 }}
-          className="h-12 w-full mt-2"
+          className="h-12 w-full mt-2 relative min-h-[48px]"
         >
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="99%" height="100%" minHeight={48}>
             <LineChart data={chartsData}>
               <YAxis domain={['auto', 'auto']} hide />
               <Line type="monotone" dataKey="power" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
@@ -242,9 +244,9 @@ const TelemetryStrip = ({ history }: { history: any[] }) => {
         <motion.div 
           animate={{ x: mouseX * 6, y: mouseY * -4 }}
           transition={{ type: "spring", damping: 25, stiffness: 120 }}
-          className="h-12 w-full mt-2"
+          className="h-12 w-full mt-2 relative min-h-[48px]"
         >
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="99%" height="100%" minHeight={48}>
             <LineChart data={chartsData}>
               <YAxis domain={[0, 100]} hide />
               <Line type="monotone" dataKey="battery" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
@@ -592,6 +594,16 @@ export default function App() {
   const [guestSessions, setGuestSessions] = useState<any[]>([]);
   const [voiceSettings, setVoiceSettings] = useState<any>({ persona: 'Ujo', pitch: 1.0, speechRate: 1.0 });
 
+  const audioContextRef = React.useRef<AudioContext | null>(null);
+  const ambientAudioRef = React.useRef<AudioContext | null>(null);
+
+  const getTTSContext = () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    }
+    return audioContextRef.current;
+  };
+
   const fetchGuestSessions = async () => {
     try {
       const res = await fetch('/api/security/guest-sessions');
@@ -656,13 +668,6 @@ export default function App() {
     const scoreMap = { success: 1, warning: -2, info: 0, error: -5 };
     setTrustScore(prev => Math.min(100, Math.max(0, prev + scoreMap[type])));
   };
-
-  useEffect(() => {
-    if (ambientGain && ambientAudio) {
-      const targetGain = isGlobalMuted ? 0 : 0.015;
-      ambientGain.gain.setTargetAtTime(targetGain, ambientAudio.currentTime, 1.5);
-    }
-  }, [isGlobalMuted, ambientGain, ambientAudio]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -768,13 +773,6 @@ export default function App() {
   }, [audioTheme]);
 
   useEffect(() => {
-    if (ambientGain && ambientAudio) {
-      const target = isGlobalMuted ? 0 : 0.015;
-      ambientGain.gain.setTargetAtTime(target, ambientAudio.currentTime, 0.5);
-    }
-  }, [isGlobalMuted, ambientAudio, ambientGain]);
-
-  useEffect(() => {
     const startOnInteraction = () => {
       initAmbientSound();
       window.removeEventListener('mousedown', startOnInteraction);
@@ -831,7 +829,10 @@ export default function App() {
              bytes[i] = binaryString.charCodeAt(i);
          }
          
-         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+         const audioContext = getTTSContext();
+         if (audioContext.state === 'suspended') {
+           await audioContext.resume();
+         }
          const audioBuffer = audioContext.createBuffer(1, bytes.length / 2, 24000);
          const channelData = audioBuffer.getChannelData(0);
          const dataView = new DataView(bytes.buffer);
@@ -1072,9 +1073,13 @@ export default function App() {
     socket.on('motion-detected', (payload: { room: string, timestamp: string }) => {
        addTrustLog(`MOTION_SENSOR: Activity detected in ${payload.room}`, 'warning');
        if (payload.room === 'Living Room') {
+         setShowVoiceOverlay(true);
          setNlpResponse(`Motion detected in ${payload.room}. Activating peripheral surveillance.`);
          // Auto-clear after 8s
-         setTimeout(() => setNlpResponse(null), 8000);
+         setTimeout(() => {
+           setNlpResponse(null);
+           setShowVoiceOverlay(false);
+         }, 8000);
        }
     });
 

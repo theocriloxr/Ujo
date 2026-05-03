@@ -296,7 +296,9 @@ class StateManager {
   }
 
   async simulateMotion(room: string) {
-    this.io.emit('motion-detected', { room, timestamp: new Date() });
+    if (io) {
+      io.emit('motion-detected', { room, timestamp: new Date() });
+    }
     await this.logSecurityEvent('MOTION_DETECTED', 'Occupancy Sensor', 'SUCCESS', { room });
     console.log(`[MOTION] Simulated event in ${room}`);
   }
