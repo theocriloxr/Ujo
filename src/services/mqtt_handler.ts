@@ -62,9 +62,11 @@ export function setupMQTT(io: Server, prisma: PrismaClient) {
       if (data.voltage) {
         await prisma.energyTelemetry.create({
           data: {
-            voltage: data.voltage,
-            current: data.current || 0,
-            frequency: 50,
+            voltage: parseFloat(data.voltage) || 0,
+            current: parseFloat(data.current) || 0,
+            frequency: parseFloat(data.frequency) || 50,
+            reactivePower: parseFloat(data.reactive_power) || 0,
+            powerFactor: parseFloat(data.power_factor) || 1.0,
             source: context.powerSource
           }
         });

@@ -237,6 +237,23 @@ class StateManager {
     await this.broadcastUpdate();
   }
 
+  // --- SECURITY LOGGING ---
+  async logSecurityEvent(action: string, actor: string, status: 'SUCCESS' | 'FAILURE', metadata?: any) {
+    try {
+      await prisma.securityAudit.create({
+        data: {
+          action,
+          actor,
+          status,
+          metadata: metadata ? JSON.stringify(metadata) : null
+        }
+      });
+      console.log(`[SECURITY AUDIT] ${action} by ${actor}: ${status}`);
+    } catch (err) {
+      console.error('Failed to log security event:', err);
+    }
+  }
+
   // --- DURESS PROTOCOL ---
   async unlockWithPin(pin: string) {
     const NORMAL_PIN = '1234';
@@ -245,6 +262,7 @@ class StateManager {
     if (pin === NORMAL_PIN) {
       await this.updateDevice('lock_1', 'unlocked');
       await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { mode: 'STANDARD' } });
+      await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'SUCCESS', { type: 'NORMAL' });
       return { success: true, message: 'Welcome. Door unlocked.' };
     } 
     
@@ -257,9 +275,11 @@ class StateManager {
         'CRITICAL',
         'SECURITY'
       );
+      await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'SUCCESS', { type: 'DURESS' });
       return { success: true, message: 'Welcome. Door unlocked.' };
     }
 
+    await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'FAILURE', { pin_entered: '****' });
     return { success: false, message: 'Invalid PIN' };
   }
 
@@ -273,6 +293,12 @@ class StateManager {
     });
     await this.broadcastUpdate();
     return alert.id;
+  }
+
+  async simulateMotion(room: string) {
+    this.io.emit('motion-detected', { room, timestamp: new Date() });
+    await this.logSecurityEvent('MOTION_DETECTED', 'Occupancy Sensor', 'SUCCESS', { room });
+    console.log(`[MOTION] Simulated event in ${room}`);
   }
 
   async confirmAlert(id: string, action: string) {
@@ -628,14 +654,70 @@ async function startServer() {
 
   // GUEST QR CODE GENERATOR
   app.post('/api/security/guest-code', async (req, res) => {
+    const { name = 'Guest' } = req.body;
     // Generate a temporary JWT for guest access to the living room
-    const token = jwt.sign({ role: 'guest', room: 'living_room', exp: Math.floor(Date.now() / 1000) + (60 * 60) }, JWT_SECRET);
+    const expiresIn = 60 * 60; // 1 hour
+    const token = jwt.sign({ role: 'guest', room: 'living_room', name }, JWT_SECRET, { expiresIn });
     
+    // Save session to database
+    await prisma.guestSession.create({
+      data: {
+        token,
+        name,
+        expiresAt: new Date(Date.now() + expiresIn * 1000)
+      }
+    });
+
+    await stateManager.logSecurityEvent('GUEST_CODE_GEN', 'Admin', 'SUCCESS', { guest_name: name });
+
     // Generate the URL that the guest scans
     const accessUrl = `http://ujo-home.local/guest?token=${token}`;
     const qrCodeImage = await QRCode.toDataURL(accessUrl);
     
     res.json({ success: true, url: accessUrl, qrCode: qrCodeImage });
+  });
+
+  app.get('/api/security/guest-sessions', async (req, res) => {
+    const sessions = await prisma.guestSession.findMany({
+      where: { revoked: false, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(sessions);
+  });
+
+  app.post('/api/security/revoke-session', async (req, res) => {
+    const { id } = req.body;
+    await prisma.guestSession.update({
+      where: { id },
+      data: { revoked: true }
+    });
+    await stateManager.logSecurityEvent('REVOCATION', 'Admin', 'SUCCESS', { session_id: id });
+    res.json({ success: true });
+  });
+
+  app.post('/api/motion', async (req, res) => {
+    const { room = 'Living Room' } = req.body;
+    await stateManager.simulateMotion(room);
+    res.json({ success: true, message: `Motion event broadcasted for ${room}` });
+  });
+
+  // Voice Settings Endpoints
+  app.get('/api/voice/settings', async (req, res) => {
+    const settings = await prisma.voiceSettings.upsert({
+      where: { id: 'GLOBAL' },
+      update: {},
+      create: { id: 'GLOBAL' }
+    });
+    res.json(settings);
+  });
+
+  app.post('/api/voice/settings', async (req, res) => {
+    const { persona, pitch, speechRate } = req.body;
+    const settings = await prisma.voiceSettings.update({
+      where: { id: 'GLOBAL' },
+      data: { persona, pitch: parseFloat(pitch), speechRate: parseFloat(speechRate) }
+    });
+    res.json(settings);
   });
 
   app.post('/api/system/simulate-tracking', async (req, res) => {

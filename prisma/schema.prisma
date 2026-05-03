@@ -52,12 +52,40 @@ model AccessProfile {
 }
 
 model EnergyTelemetry {
-  id        Int      @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
+  timestamp     DateTime @default(now())
+  voltage       Float
+  current       Float
+  frequency     Float
+  reactivePower Float    @default(0.0)
+  powerFactor   Float    @default(1.0)
+  source        String   // MAINS or INVERTER
+}
+
+model SecurityAudit {
+  id        String   @id @default(uuid())
+  action    String   // PIN_ATTEMPT, PROFILE_CHANGE, GUEST_CODE_GEN, REVOCATION
+  actor     String
+  status    String   // SUCCESS, FAILURE
   timestamp DateTime @default(now())
-  voltage   Float
-  current   Float
-  frequency Float
-  source    String   // MAINS or INVERTER
+  metadata  String?  // JSON
+}
+
+model GuestSession {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  name      String
+  role      String   @default("GUEST")
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+}
+
+model VoiceSettings {
+  id         String @id @default("GLOBAL")
+  persona    String @default("Ujo") // Ujo, Jarvis, Samantha
+  pitch      Float  @default(1.0)
+  speechRate Float  @default(1.0)
 }
 
 model AuditLog {

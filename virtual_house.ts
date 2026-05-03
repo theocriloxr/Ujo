@@ -46,7 +46,10 @@ function startSimulation() {
       // 3. Publish Data
       client.publish('ujo/power/grid', JSON.stringify({ 
         voltage: Math.round(gridVoltage),
-        source: 'MAINS'
+        source: 'MAINS',
+        reactive_power: Math.round(Math.random() * 200),
+        power_factor: (0.85 + Math.random() * 0.15).toFixed(2),
+        current: (5 + Math.random() * 5).toFixed(1)
       }));
 
       client.publish('ujo/sensors/fridge', JSON.stringify({ 

@@ -62,6 +62,8 @@ interface EnergyData {
 interface DeviceCardProps {
   device: Device;
   onToggle: () => void;
+  isExpanded: boolean;
+  onExpand: () => void;
 }
 
 interface Alert {
@@ -101,37 +103,42 @@ interface HAStatus {
 
 // --- HUD COMPONENTS ---
 
-const AIOrb = ({ active }: { active: boolean }) => (
+const AIOrb = ({ active, isVerified }: { active: boolean, isVerified?: boolean }) => (
   <div className="relative w-12 h-12 flex items-center justify-center">
     {/* Inner Intensity Glow */}
     <motion.div 
       animate={{ 
         scale: active ? [0.8, 1.2, 0.8] : [0.9, 1.1, 0.9],
-        opacity: active ? [0.2, 0.4, 0.2] : [0.05, 0.1, 0.05]
+        opacity: active ? [0.3, 0.6, 0.3] : [0.05, 0.1, 0.05],
+        boxShadow: active ? (isVerified ? ["0 0 20px rgba(34,211,238,0.3)", "0 0 60px rgba(34,211,238,0.5)", "0 0 20px rgba(34,211,238,0.3)"] : ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]) : "none"
       }}
       transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-      className="absolute inset-0 rounded-full bg-[var(--accent-gold)] blur-xl"
+      className={`absolute inset-0 rounded-full blur-xl transition-colors duration-1000 ${isVerified ? 'bg-cyan-500' : 'bg-[var(--accent-gold)]'}`}
     />
     
     {/* Main Orb Sphere */}
     <motion.div 
       animate={{ 
-        boxShadow: active ? [
+        boxShadow: active ? (isVerified ? [
+          '0 0 30px rgba(34,211,238,0.4)',
+          '0 0 80px rgba(34,211,238,0.8)',
+          '0 0 30px rgba(34,211,238,0.4)'
+        ] : [
           '0 0 20px rgba(250,204,21,0.2)',
-          '0 0 40px rgba(250,204,21,0.5)',
+          '0 0 50px rgba(250,204,21,0.6)',
           '0 0 20px rgba(250,204,21,0.2)'
-        ] : '0 0 10px rgba(250,204,21,0.1)'
+        ]) : '0 0 10px rgba(250,204,21,0.1)'
       }}
       transition={{ duration: 2, repeat: Infinity }}
       className={`w-10 h-10 rounded-full relative z-10 border-t-2 border-white/20 shadow-2xl transition-all duration-1000 ${
         active 
-          ? 'bg-gradient-to-tr from-yellow-700 via-[var(--accent-gold)] to-yellow-100 scale-110' 
+          ? (isVerified ? 'bg-gradient-to-tr from-cyan-700 via-cyan-400 to-cyan-100 scale-110 shadow-[0_0_40px_rgba(34,211,238,0.4)]' : 'bg-gradient-to-tr from-yellow-700 via-[var(--accent-gold)] to-yellow-100 scale-110 shadow-[0_0_30px_rgba(250,204,21,0.3)]')
           : 'bg-zinc-800 border-zinc-700/50 grayscale opacity-40'
       }`}
     >
        <div className="absolute inset-1 rounded-full bg-black/20 backdrop-blur-[2px] overflow-hidden">
           <motion.div 
-            animate={{ rotate: 360, opacity: active ? [0.1, 0.3, 0.1] : 0 }}
+            animate={{ rotate: 360, opacity: active ? [0.1, 0.4, 0.1] : 0 }}
             transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
             className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.4),transparent_60%)]"
           />
@@ -249,14 +256,15 @@ const TelemetryStrip = ({ history }: { history: any[] }) => {
   );
 };
 
-const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, voiceConfidence }: { 
+const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, voiceConfidence, isVoiceVerified }: { 
   isOpen: boolean, 
   onClose: () => void, 
   onSend: (e: React.FormEvent) => void, 
   input: string, 
   setInput: (s: string) => void,
   activeZone: string,
-  voiceConfidence: number
+  voiceConfidence: number,
+  isVoiceVerified: boolean
 }) => (
   <AnimatePresence>
     {isOpen && (
@@ -266,33 +274,61 @@ const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZ
         exit={{ opacity: 0 }} 
         className="fixed inset-0 bg-black/95 backdrop-blur-2xl z-[200] flex flex-col items-center justify-center p-6 text-center"
       >
-        <button onClick={onClose} className="absolute top-10 right-10 text-zinc-500 hover:text-white p-4">
+        <button 
+          onClick={onClose} 
+          className="absolute top-10 right-10 text-zinc-500 hover:text-white p-4 group flex flex-col items-center gap-2"
+        >
            <VolumeX size={32} />
+           <span className="text-[8px] font-mono opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">[ESC] CLOSE</span>
         </button>
 
         <motion.div 
           animate={{ 
-            scale: [1, 1.1, 1],
-            boxShadow: ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]
+            scale: isVoiceVerified ? [1, 1.25, 1] : [1, 1.1, 1],
+            boxShadow: isVoiceVerified 
+              ? ["0 0 60px rgba(34,211,238,0.4)", "0 0 120px rgba(34,211,238,0.8)", "0 0 60px rgba(34,211,238,0.4)"]
+              : ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]
           }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="w-32 h-32 rounded-full bg-[var(--accent-gold)]/10 border-2 border-[var(--accent-gold)] flex items-center justify-center mb-10"
+          transition={{ duration: isVoiceVerified ? 0.8 : 2, repeat: Infinity }}
+          className={`w-32 h-32 rounded-full border-4 flex items-center justify-center mb-10 transition-all duration-1000 ${isVoiceVerified ? 'bg-cyan-500/10 border-cyan-400 shadow-[0_0_80px_rgba(34,211,238,0.3)]' : 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]'}`}
         >
-           <Mic size={48} className="text-[var(--accent-gold)]" />
+           {isVoiceVerified ? <CheckCircle size={56} className="text-cyan-400" /> : <Mic size={48} className="text-[var(--accent-gold)]" />}
         </motion.div>
 
         <div className="max-w-2xl w-full">
            <div className="flex flex-col items-center gap-4 mb-12">
-              <span className="mono-data text-xs text-[var(--accent-gold)] tracking-[0.5em] uppercase">Listening in {activeZone}</span>
-              <div className="flex items-center gap-4 w-full max-w-sm">
-                 <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+              <span className={`mono-data text-xs tracking-[0.5em] uppercase transition-colors duration-500 ${isVoiceVerified ? 'text-cyan-400' : 'text-[var(--accent-gold)]'}`}>
+                {isVoiceVerified ? 'SECURE IDENTITY CONFIRMED' : `Listening in ${activeZone}`}
+              </span>
+               <div className="flex flex-col items-center gap-2 w-full max-w-sm">
+                 <div className="flex items-center justify-between w-full mb-1">
+                    <span className="mono-data text-[8px] text-zinc-500 uppercase tracking-widest">Biometric Match Integrity</span>
+                    <motion.span 
+                      animate={{ scale: [1, 1.1, 1] }}
+                      transition={{ duration: 0.5, repeat: Infinity }}
+                      className={`text-[10px] font-black mono-data ${voiceConfidence > 80 ? 'text-green-500' : 'text-yellow-500'}`}
+                    >
+                      {voiceConfidence.toFixed(1)}%
+                    </motion.span>
+                 </div>
+                 <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
                     <motion.div 
+                      key="confidence-meter"
                       initial={{ width: 0 }}
                       animate={{ width: `${voiceConfidence}%` }}
-                      className="h-full bg-[var(--accent-gold)]"
+                      transition={{ type: "spring", damping: 15, stiffness: 60 }}
+                      className={`h-full transition-colors duration-1000 ${voiceConfidence > 90 ? 'bg-cyan-400' : voiceConfidence > 80 ? 'bg-green-500' : 'bg-yellow-500'}`}
                     />
                  </div>
-                 <span className="mono-data text-[10px] text-zinc-500">AUTH_{voiceConfidence.toFixed(0)}%</span>
+                 {isVoiceVerified && (
+                   <motion.span 
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-[8px] text-cyan-400 font-bold uppercase tracking-[0.3em] mt-2"
+                   >
+                     Signature Verified • Match Confirmed
+                   </motion.span>
+                 )}
               </div>
            </div>
 
@@ -355,7 +391,7 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
   };
 
   const isActive = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
-  const isCritical = device.state === 'critical' || device.status === 'ERROR';
+  const isCritical = device.state === 'critical' || device.status === 'ERROR' || device.status === 'OFFLINE';
 
   const handleReboot = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -366,30 +402,81 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
     });
   };
 
+  // Mini sparkline mock components
+  const Sparkline = () => (
+    <div className="flex items-end gap-0.5 h-4 opacity-50 px-2">
+      {[12, 18, 14, 22, 19, 25, 20, 24, 15, 21].map((h, i) => (
+        <motion.div 
+          key={i}
+          animate={{ height: isActive ? [`${h}%`, `${h+10}%`, `${h}%`] : '10%' }}
+          transition={{ duration: 1 + Math.random(), repeat: Infinity }}
+          className={`w-0.5 rounded-full ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`}
+        />
+      ))}
+    </div>
+  );
+
   return (
     <motion.div 
       layout
       onClick={onExpand}
       className={`glass-hud p-4 flex flex-col group cursor-pointer relative transition-all duration-500 ${isActive ? 'border-[var(--accent-gold)]/40 shadow-[0_0_20px_rgba(250,204,21,0.05)]' : ''} ${isExpanded ? 'col-span-2 row-span-2 ring-1 ring-[var(--accent-gold)]/20' : ''}`}
     >
+      {/* Pulsing indicator for anomalous devices */}
+      {isCritical && (
+        <motion.div 
+          animate={{ scale: [1, 1.2, 1], opacity: [0.1, 0.3, 0.1] }}
+          transition={{ duration: 1, repeat: Infinity }}
+          className="absolute inset-0 rounded-3xl bg-red-500/20 pointer-events-none"
+        />
+      )}
+
       <div className="flex items-center justify-between w-full">
         <div className="flex items-center gap-4">
-          <div className={`p-3 rounded-lg border transition-all ${isActive ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]/20' : 'bg-white/5 border-white/5'}`}>
-            {getIcon()}
+          <div className="relative">
+            {isCritical && (
+              <motion.div 
+                animate={{ scale: [1, 1.5, 1], opacity: [1, 0, 1] }}
+                transition={{ duration: 1.5, repeat: Infinity }}
+                className="absolute inset-0 rounded-lg bg-red-500/40 blur-md"
+              />
+            )}
+            <div className={`p-3 rounded-lg border transition-all relative z-10 ${isActive ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]/20 shadow-[0_0_15px_rgba(250,204,21,0.1)]' : 'bg-white/5 border-white/5'} ${isCritical ? 'border-red-500/40' : ''}`}>
+              {getIcon()}
+            </div>
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-bold tracking-tight text-white">{device.name}</span>
             <div className="flex items-center gap-2">
               <span className="mono-data text-[9px] text-zinc-500 uppercase">{device.state}</span>
               <motion.span 
-                 animate={{ opacity: isCritical ? [0.2, 1, 0.2] : 1 }}
-                 transition={{ duration: 1, repeat: Infinity }}
-                 className={`w-1 h-1 rounded-full ${isActive ? 'bg-green-500' : isCritical ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} 
+                 animate={isCritical ? { 
+                   opacity: [0.2, 1, 0.2],
+                   scale: [1, 1.5, 1],
+                   boxShadow: ["0 0 0px rgba(239,68,68,0)", "0 0 10px rgba(239,68,68,0.8)", "0 0 0px rgba(239,68,68,0)"]
+                 } : { opacity: 1, scale: 1 }}
+                 transition={{ duration: 1.5, repeat: Infinity }}
+                 className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : isCritical ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} 
               />
               <span className="mono-data text-[7px] text-zinc-600 tracking-widest">{device.status}</span>
             </div>
           </div>
         </div>
+        
+        {/* Real-time Indicator Visualization */}
+        <div className="flex-1 flex justify-end items-center mr-4">
+           {isActive && device.powerUsage > 0 && <Sparkline />}
+           {!isActive && isCritical && (
+             <motion.div 
+               animate={{ opacity: [0.3, 1, 0.3] }}
+               transition={{ duration: 0.8, repeat: Infinity }}
+               className="text-[7px] font-black text-red-500 mono-data uppercase letter-spacing-widest"
+             >
+               Ping Fail
+             </motion.div>
+           )}
+        </div>
+
         <div className="flex items-center gap-3">
           <button 
             onClick={(e) => { e.stopPropagation(); onToggle(); }}
@@ -501,6 +588,60 @@ export default function App() {
   const [aiSuggestion, setAiSuggestion] = useState<string>("Consider arming security protocols for the night.");
   const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
   const [oscillators, setOscillators] = useState<OscillatorNode[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [guestSessions, setGuestSessions] = useState<any[]>([]);
+  const [voiceSettings, setVoiceSettings] = useState<any>({ persona: 'Ujo', pitch: 1.0, speechRate: 1.0 });
+
+  const fetchGuestSessions = async () => {
+    try {
+      const res = await fetch('/api/security/guest-sessions');
+      const json = await res.json();
+      setGuestSessions(json);
+    } catch (e) { console.error(e); }
+  };
+
+  const fetchVoiceSettings = async () => {
+    try {
+      const res = await fetch('/api/voice/settings');
+      const json = await res.json();
+      setVoiceSettings(json);
+    } catch (e) { console.error(e); }
+  };
+
+  const saveVoiceSettings = async (settings: any) => {
+    try {
+      await fetch('/api/voice/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      setVoiceSettings(settings);
+    } catch (e) { console.error(e); }
+  };
+
+  const revokeGuestSession = async (id: string) => {
+    const session = guestSessions.find(s => s.id === id);
+    if (!session) return;
+
+    if (!window.confirm(`Are you sure you want to revoke access for ${session.name}?`)) {
+      return;
+    }
+
+    try {
+      await fetch('/api/security/revoke-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      fetchGuestSessions();
+      addTrustLog(`Guest session for ${session.name} revoked manually`, "warning");
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => {
+    fetchGuestSessions();
+    fetchVoiceSettings();
+  }, [showSettings]);
 
   const addTrustLog = (message: string, type: 'success' | 'warning' | 'info' | 'error' = 'info') => {
     const log = {
@@ -517,6 +658,13 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (ambientGain && ambientAudio) {
+      const targetGain = isGlobalMuted ? 0 : 0.015;
+      ambientGain.gain.setTargetAtTime(targetGain, ambientAudio.currentTime, 1.5);
+    }
+  }, [isGlobalMuted, ambientGain, ambientAudio]);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.code === 'Space') {
         e.preventDefault();
@@ -529,9 +677,11 @@ export default function App() {
       
       if (e.key === 'Escape') {
         setShowVoiceOverlay(false);
+        setIsVoiceVerified(false);
         setShowVaultAuth(false);
         setShowOnboarding(false);
         setExpandedDeviceId(null);
+        setShowSettings(false);
       }
     };
 
@@ -658,9 +808,9 @@ export default function App() {
     if (isGlobalMuted) return;
     try {
       // 1. High-Fidelity Cloud Voice (SaaS Tier Simulation)
-      const persona = data?.voice?.persona;
+      const persona = voiceSettings.persona || 'Ujo';
       // Selecting the most natural voices available in the model
-      const voiceName = isSaaSTier ? 'Charon' : 'Puck'; 
+      const voiceName = persona === 'Jarvis' ? 'Charon' : persona === 'Samantha' ? 'Puck' : 'Fenrir'; 
       
       const ttsResp = await ai.models.generateContent({
          model: "gemini-3.1-flash-tts-preview",
@@ -692,8 +842,9 @@ export default function App() {
          
          const source = audioContext.createBufferSource();
          source.buffer = audioBuffer;
-         // Slight rate adjustment for "Natural" cadence: 0.98 - 1.02 is the human sweet spot
-         source.playbackRate.value = isSaaSTier ? 1.0 : 1.05; 
+         // Applied dynamic rate and pitch
+         source.playbackRate.value = voiceSettings.speechRate || 1.0; 
+         source.detune.value = (voiceSettings.pitch - 1.0) * 1200; // 1200 cents per octave
          source.connect(audioContext.destination);
          source.start();
          
@@ -707,6 +858,8 @@ export default function App() {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
+    utterance.pitch = voiceSettings.pitch || 1.0;
+    utterance.rate = voiceSettings.speechRate || 1.0;
     
     const voices = window.speechSynthesis.getVoices();
     if (voices.length > 0) {
@@ -914,6 +1067,15 @@ export default function App() {
           return newHistory.slice(-20);
         });
       }
+    });
+
+    socket.on('motion-detected', (payload: { room: string, timestamp: string }) => {
+       addTrustLog(`MOTION_SENSOR: Activity detected in ${payload.room}`, 'warning');
+       if (payload.room === 'Living Room') {
+         setNlpResponse(`Motion detected in ${payload.room}. Activating peripheral surveillance.`);
+         // Auto-clear after 8s
+         setTimeout(() => setNlpResponse(null), 8000);
+       }
     });
 
     socket.on('phone_sonar_active', (payload) => {
@@ -1288,7 +1450,7 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-8">
-           <div className="flex flex-col items-center gap-2">
+           <div className="flex flex-col items-center gap-2 group relative">
               <div className="text-[var(--accent-gold)] font-mono text-[8px] tracking-widest uppercase">System Trust</div>
               <div className="text-2xl font-black italic text-white leading-none">{trustScore}%</div>
               <div className="w-20 h-1 bg-white/10 rounded-full overflow-hidden">
@@ -1296,6 +1458,17 @@ export default function App() {
                    animate={{ width: `${trustScore}%` }}
                    className={`h-full ${trustScore > 70 ? 'bg-green-500' : trustScore > 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
                  />
+              </div>
+              
+              {/* Trust Score Tooltip */}
+              <div className="absolute top-full mt-2 w-48 p-3 bg-zinc-900 border border-white/10 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[100] shadow-2xl">
+                 <p className="text-[9px] text-zinc-400 leading-relaxed font-mono">
+                    <span className="text-[var(--accent-gold)] font-bold uppercase block mb-1">Score Matrix:</span>
+                    • System Core Stability<br/>
+                    • Security Event History<br/>
+                    • AI Interaction Success<br/>
+                    • Voice Biometric Accuracy
+                 </p>
               </div>
            </div>
 
@@ -1311,7 +1484,14 @@ export default function App() {
               {isGlobalMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
            </button>
 
-           <AIOrb active={!!nlpResponse} />
+           <button 
+             onClick={() => setShowSettings(true)}
+             className="p-3 rounded-xl border bg-white/5 border-white/10 text-zinc-500 hover:bg-white/10 hover:text-[var(--accent-gold)] transition-all"
+           >
+              <Settings size={18} />
+           </button>
+
+           <AIOrb active={!!nlpResponse} isVerified={isVoiceVerified} />
         </div>
       </header>
 
@@ -1657,12 +1837,16 @@ export default function App() {
 
       <VoiceCommandOverlay 
         isOpen={showVoiceOverlay} 
-        onClose={() => setShowVoiceOverlay(false)}
+        onClose={() => {
+          setShowVoiceOverlay(false);
+          setIsVoiceVerified(false);
+        }}
         onSend={sendVoiceCommand}
         input={voiceInput}
         setInput={setVoiceInput}
         activeZone={activeZone}
         voiceConfidence={voiceConfidence}
+        isVoiceVerified={isVoiceVerified}
       />
 
       {/* VAULT AUTH MODAL */}
@@ -1787,6 +1971,30 @@ export default function App() {
             {spatialPulseMessage}
           </motion.div>
         )}
+        
+        {nlpResponse && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            exit={{ opacity: 0, y: 50 }} 
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] max-w-xl w-[90%] px-6 py-4 glass-hud border-t-2 border-[var(--accent-gold)] bg-black/80 backdrop-blur-md"
+          >
+             <div className="flex items-center gap-4">
+                <div className="w-8 h-8 rounded-full bg-[var(--accent-gold)]/10 flex items-center justify-center shrink-0">
+                   <Sparkles size={14} className="text-[var(--accent-gold)]" />
+                </div>
+                <p className="text-xs text-white font-medium leading-relaxed italic">
+                   {nlpResponse}
+                </p>
+             </div>
+             <motion.div 
+               initial={{ width: "100%" }}
+               animate={{ width: 0 }}
+               transition={{ duration: 10, ease: "linear" }}
+               className="h-0.5 bg-[var(--accent-gold)]/30 absolute bottom-0 left-0"
+             />
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {/* HITL Alerts Overlay */}
@@ -1812,6 +2020,192 @@ export default function App() {
                 </div>
               </motion.div>
             ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* SETTINGS MODAL */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }} 
+            className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[300] flex items-center justify-center p-6"
+          >
+             <motion.div 
+               initial={{ scale: 0.9, y: 20 }}
+               animate={{ scale: 1, y: 0 }}
+               className="w-full max-w-4xl max-h-[80vh] bg-zinc-900 border border-white/10 rounded-3xl overflow-hidden flex flex-col"
+             >
+                <div className="p-8 border-b border-white/5 flex justify-between items-center bg-black/20">
+                   <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-2xl bg-[var(--accent-gold)]/10 flex items-center justify-center">
+                         <Settings className="text-[var(--accent-gold)]" size={24} />
+                      </div>
+                      <div>
+                         <h2 className="text-xl font-black italic text-white uppercase tracking-tight">System Configuration</h2>
+                         <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Global Node Controller</p>
+                      </div>
+                   </div>
+                   <button 
+                     onClick={() => setShowSettings(false)}
+                     className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 transition-all text-zinc-400"
+                   >
+                      <VolumeX size={18} />
+                   </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-8 grid grid-cols-1 md:grid-cols-2 gap-8 custom-scrollbar">
+                   {/* AI Assistant Personality */}
+                   <div className="space-y-6">
+                      <div className="flex items-center gap-2 mb-2">
+                         <Sparkles className="text-[var(--accent-gold)]" size={16} />
+                         <span className="text-xs font-bold text-white uppercase tracking-widest">Assistant Customization</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-3 gap-2">
+                         {['Ujo', 'Jarvis', 'Samantha'].map(p => (
+                           <button 
+                             key={p}
+                             onClick={() => saveVoiceSettings({ ...voiceSettings, persona: p })}
+                             className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-2 ${voiceSettings.persona === p ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)] text-[var(--accent-gold)]' : 'bg-white/5 border-white/5 text-zinc-500 hover:border-white/20'}`}
+                           >
+                              <Mic size={14} className={voiceSettings.persona === p ? 'animate-pulse' : ''} />
+                              <span className="text-[9px] font-black tracking-widest">{p}</span>
+                           </button>
+                         ))}
+                      </div>
+
+                      <div className="space-y-4 bg-white/5 p-4 rounded-2xl">
+                         <div className="space-y-2">
+                            <div className="flex justify-between text-[8px] font-mono uppercase text-zinc-500">
+                               <span>Vocal Pitch</span>
+                               <span className="text-[var(--accent-gold)] font-bold">{voiceSettings.pitch.toFixed(1)}x</span>
+                            </div>
+                            <input 
+                              type="range" min="0.5" max="2" step="0.1"
+                              value={voiceSettings.pitch}
+                              onChange={(e) => saveVoiceSettings({ ...voiceSettings, pitch: parseFloat(e.target.value) })}
+                              className="w-full h-1 bg-white/10 rounded-full appearance-none accent-[var(--accent-gold)] cursor-pointer"
+                            />
+                         </div>
+                         <div className="space-y-2">
+                            <div className="flex justify-between text-[8px] font-mono uppercase text-zinc-500">
+                               <span>Speech Cadence</span>
+                               <span className="text-[var(--accent-gold)] font-bold">{voiceSettings.speechRate.toFixed(1)}x</span>
+                            </div>
+                            <input 
+                              type="range" min="0.5" max="2" step="0.1"
+                              value={voiceSettings.speechRate}
+                              onChange={(e) => saveVoiceSettings({ ...voiceSettings, speechRate: parseFloat(e.target.value) })}
+                              className="w-full h-1 bg-white/10 rounded-full appearance-none accent-[var(--accent-gold)] cursor-pointer"
+                            />
+                         </div>
+                      </div>
+
+                      {/* Ambient Audio Controls */}
+                      <div className="pt-6 border-t border-white/5 space-y-4">
+                         <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                               <Wind size={14} className="text-[var(--accent-cyan)]" />
+                               <span className="text-xs font-bold text-white uppercase tracking-widest">Ambient Field</span>
+                            </div>
+                            <button 
+                               onClick={() => setIsGlobalMuted(!isGlobalMuted)}
+                               className={`px-3 py-1.5 rounded-lg text-[8px] font-black uppercase transition-all ${isGlobalMuted ? 'bg-red-500/20 text-red-500' : 'bg-green-500/10 text-green-500'}`}
+                            >
+                               {isGlobalMuted ? 'Muted' : 'Surround Active'}
+                            </button>
+                         </div>
+                         <div className="flex gap-2">
+                            {['deep_space', 'nebula', 'pulse'].map(t => (
+                               <button 
+                                 key={t}
+                                 onClick={() => setAudioTheme(t as any)}
+                                 className={`flex-1 py-3 rounded-xl border text-[8px] font-black uppercase tracking-tighter transition-all ${audioTheme === t ? 'bg-[var(--accent-cyan)]/10 border-[var(--accent-cyan)] text-[var(--accent-cyan)]' : 'bg-white/5 border-white/5 text-zinc-500'}`}
+                               >
+                                  {t.replace('_', ' ')}
+                               </button>
+                            ))}
+                         </div>
+                      </div>
+                   </div>
+
+                   {/* Guest Session Management */}
+                   <div className="space-y-6">
+                      <div className="flex items-center justify-between mb-2">
+                         <div className="flex items-center gap-2">
+                            <QrCode className="text-[var(--accent-cyan)]" size={16} />
+                            <span className="text-xs font-bold text-white uppercase tracking-widest">Active Guest Tokens</span>
+                         </div>
+                         <button 
+                           onClick={generateGuestQR}
+                           className="text-[9px] font-black text-[var(--accent-cyan)] hover:underline uppercase tracking-tighter"
+                         >
+                           + Issue New Token
+                         </button>
+                                          <div className="space-y-3">
+                         {guestSessions.length === 0 ? (
+                           <div className="p-8 border border-dashed border-white/5 rounded-3xl flex flex-col items-center gap-4 text-center bg-black/20">
+                              <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center">
+                                 <Shield size={20} className="text-zinc-600" />
+                              </div>
+                              <p className="text-[10px] text-zinc-500 font-mono leading-relaxed px-4">Secure zone established. No active ephemeral identities detected in proximity.</p>
+                           </div>
+                         ) : (
+                           guestSessions.map(session => (
+                             <motion.div 
+                               initial={{ opacity: 0, x: -10 }}
+                               animate={{ opacity: 1, x: 0 }}
+                               key={session.id} 
+                               className="p-5 bg-white/5 border border-white/5 rounded-2xl flex items-center justify-between group hover:border-[var(--accent-cyan)]/30 hover:bg-white/[0.08] transition-all cursor-default"
+                             >
+                                <div className="flex items-center gap-4">
+                                   <div className="w-12 h-12 rounded-2xl bg-[var(--accent-cyan)]/10 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                      <Zap className="text-[var(--accent-cyan)]" size={18} />
+                                   </div>
+                                   <div className="flex flex-col">
+                                      <span className="text-xs font-bold text-white tracking-tight mb-0.5">{session.name}</span>
+                                      <div className="flex items-center gap-2">
+                                         <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.3)]" />
+                                         <span className="text-[8px] font-mono text-zinc-500 uppercase tracking-widest">
+                                           Expiry: {new Date(session.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                         </span>
+                                      </div>
+                                   </div>
+                                </div>
+                                <button 
+                                  onClick={() => revokeGuestSession(session.id)}
+                                  className="px-4 py-2 rounded-xl bg-red-500/10 text-red-500 text-[8px] font-black uppercase lg:opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500 hover:text-white"
+                                >
+                                   Revoke Access
+                                </button>
+                             </motion.div>
+                           ))
+                         )}
+                      </div>     </div>
+                   </div>
+                </div>
+
+                <div className="p-8 border-t border-white/5 bg-black/20 flex justify-between items-center">
+                   <div className="flex items-center gap-4">
+                      <div className="flex flex-col">
+                         <span className="text-[10px] font-bold text-white">Kernel Stability</span>
+                         <div className="flex gap-1 items-center">
+                            <motion.div animate={{ scale: [1, 1.5, 1] }} transition={{ repeat: Infinity }} className="w-1 h-1 rounded-full bg-green-500" />
+                            <span className="text-[8px] font-mono text-zinc-500">99.98% - NOMINAL</span>
+                         </div>
+                      </div>
+                   </div>
+                   <button 
+                     onClick={() => setShowSettings(false)}
+                     className="px-8 py-3 bg-[var(--accent-gold)] text-black rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-95 transition-transform"
+                   >
+                      Commit Changes
+                   </button>
+                </div>
+             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
