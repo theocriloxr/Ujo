@@ -3,23 +3,23 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# System dependencies for SQLite and canvas/build tools
-RUN apk add --no-cache python3 make g++ 
+RUN apk add --no-cache python3 make g++
 
-COPY package*.json ./
+COPY backend/package.json backend/package-lock.json ./backend/
+COPY frontend/package.json frontend/package-lock.json ./frontend/
 
-RUN npm ci
+RUN npm ci --prefix backend && npm ci --prefix frontend
 
 COPY . .
 
-# Build the frontend and backend 
-# React/Vite builds to dist/
-RUN npm run build
+RUN npm run db:generate --prefix backend && npm run build --prefix frontend
 
-# By default, use production environment
+RUN mkdir -p /app/data
+
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=3005
+ENV DATABASE_URL=file:/app/data/ujo_os_v2.db
 
-EXPOSE 3000
+EXPOSE 3005
 
-CMD ["npm", "start"]
+CMD ["npm", "start", "--prefix", "backend"]

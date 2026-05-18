@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# Test / coverage
+coverage/
+
+# Local SQLite (dev copies outside prisma/)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

@@ -1,0 +1,5 @@
+# SQLite database files (created on first run / db push)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

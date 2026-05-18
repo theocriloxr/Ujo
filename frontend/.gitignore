@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Vite
+.vite/
+dist/
+
+# Environment (local overrides; root .env is loaded via vite.config)
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# Test / coverage
+coverage/

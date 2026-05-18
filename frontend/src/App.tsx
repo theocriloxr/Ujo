@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { 
   Activity, 
   Lightbulb, 
@@ -35,529 +35,19 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
-import { io } from 'socket.io-client';
-import { GoogleGenAI, Type, Modality, FunctionDeclaration } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-// --- TYPES ---
-interface Device {
-  id: string;
-  name: string;
-  type: string;
-  state: string;
-  status: string;
-  category: string;
-  isSheddable: boolean;
-  powerUsage: number;
-}
-
-interface EnergyData {
-  grid: string;
-  voltage: number;
-  status: string;
-  battery: number;
-  solar: number;
-  forecast: string;
-}
-
-interface DeviceCardProps {
-  device: Device;
-  onToggle: () => void;
-  isExpanded: boolean;
-  onExpand: () => void;
-}
-
-interface Alert {
-  id: string;
-  title: string;
-  message: string;
-  severity: string;
-  timestamp: string;
-  type: 'anomaly' | 'vendor' | 'energy' | 'health' | 'system' | 'security';
-}
-
-interface SystemData {
-  devices: Device[];
-  mode: string;
-  location: string;
-  updateAvailable: boolean;
-  subscriptionActive: boolean;
-  powerSource: 'MAINS' | 'INVERTER' | 'GENERATOR';
-  duressActive: boolean;
-  assistantName: string;
-  voice: {
-    persona: string;
-    pitch: number;
-    rate: number;
-  };
-  alerts: Alert[];
-  energy: EnergyData;
-  accessProfiles: any[];
-}
-
-interface HAStatus {
-  connected: boolean;
-  hub: string;
-  version: string;
-  syncedDevices: number;
-}
-
-// --- HUD COMPONENTS ---
-
-const AIOrb = ({ active, isVerified }: { active: boolean, isVerified?: boolean }) => (
-  <div className="relative w-12 h-12 flex items-center justify-center">
-    {/* Inner Intensity Glow */}
-    <motion.div 
-      animate={{ 
-        scale: active ? [0.8, 1.2, 0.8] : [0.9, 1.1, 0.9],
-        opacity: active ? [0.3, 0.6, 0.3] : [0.05, 0.1, 0.05],
-        boxShadow: active ? (isVerified ? ["0 0 20px rgba(34,211,238,0.3)", "0 0 60px rgba(34,211,238,0.5)", "0 0 20px rgba(34,211,238,0.3)"] : ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]) : "none"
-      }}
-      transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-      className={`absolute inset-0 rounded-full blur-xl transition-colors duration-1000 ${isVerified ? 'bg-cyan-500' : 'bg-[var(--accent-gold)]'}`}
-    />
-    
-    {/* Main Orb Sphere */}
-    <motion.div 
-      animate={{ 
-        boxShadow: active ? (isVerified ? [
-          '0 0 30px rgba(34,211,238,0.4)',
-          '0 0 80px rgba(34,211,238,0.8)',
-          '0 0 30px rgba(34,211,238,0.4)'
-        ] : [
-          '0 0 20px rgba(250,204,21,0.2)',
-          '0 0 50px rgba(250,204,21,0.6)',
-          '0 0 20px rgba(250,204,21,0.2)'
-        ]) : '0 0 10px rgba(250,204,21,0.1)'
-      }}
-      transition={{ duration: 2, repeat: Infinity }}
-      className={`w-10 h-10 rounded-full relative z-10 border-t-2 border-white/20 shadow-2xl transition-all duration-1000 ${
-        active 
-          ? (isVerified ? 'bg-gradient-to-tr from-cyan-700 via-cyan-400 to-cyan-100 scale-110 shadow-[0_0_40px_rgba(34,211,238,0.4)]' : 'bg-gradient-to-tr from-yellow-700 via-[var(--accent-gold)] to-yellow-100 scale-110 shadow-[0_0_30px_rgba(250,204,21,0.3)]')
-          : 'bg-zinc-800 border-zinc-700/50 grayscale opacity-40'
-      }`}
-    >
-       <div className="absolute inset-1 rounded-full bg-black/20 backdrop-blur-[2px] overflow-hidden">
-          <motion.div 
-            animate={{ rotate: 360, opacity: active ? [0.1, 0.4, 0.1] : 0 }}
-            transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-            className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.4),transparent_60%)]"
-          />
-       </div>
-    </motion.div>
-
-    {/* Satellite Rings */}
-    {active && (
-      <motion.div 
-        initial={{ rotate: 0, scale: 0.8, opacity: 0 }}
-        animate={{ rotate: 360, scale: 1.4, opacity: 0.2 }}
-        transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-        className="absolute inset-0 rounded-full border border-[var(--accent-gold)] border-dashed"
-      />
-    )}
-  </div>
-);
-
-const DigitalTwinMockup = () => (
-  <div className="relative w-full h-[300px] lg:h-[500px] overflow-hidden rounded-3xl group">
-    <div className="absolute inset-0 opacity-20" 
-      style={{
-        backgroundImage: `linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)`,
-        backgroundSize: '40px 40px',
-        transform: 'perspective(1000px) rotateX(60deg) translateY(-100px)',
-        transformOrigin: 'top'
-      }} 
-    />
-    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-       <div className="w-64 h-64 border border-[var(--accent-gold)]/20 rounded-lg transform rotate-45 animate-pulse" />
-       <div className="absolute w-48 h-48 border border-[var(--accent-cyan)]/20 rounded-lg transform rotate-45 scale-75" />
-       <div className="absolute w-full h-full bg-gradient-to-t from-[#050505] via-transparent to-transparent" />
-    </div>
-    <div className="absolute top-4 left-4 flex flex-col gap-1">
-      <span className="mono-data text-[10px] text-[var(--accent-gold)]">Scan Mode: Active</span>
-      <span className="mono-data text-[8px] text-zinc-500">Spatial Integrity: 98.4%</span>
-    </div>
-  </div>
-);
-
-const TelemetryStrip = ({ history }: { history: any[] }) => {
-  const [mouseX, setMouseX] = useState(0);
-  const [mouseY, setMouseY] = useState(0);
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setMouseX(((e.clientX - rect.left) / rect.width - 0.5) * 2);
-    setMouseY(((e.clientY - rect.top) / rect.height - 0.5) * 2);
-  };
-
-  const chartsData = history.slice(-30).map(d => ({
-    ...d,
-    power: Math.max(10, (d.voltage || 220) * 0.5 + Math.random() * 20),
-    battery: Math.max(20, 85 + Math.sin(Date.now() / 5000) * 5)
-  }));
-
-  const currentData = chartsData[chartsData.length - 1] || { voltage: 0, power: 0, battery: 0 };
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4" onMouseMove={handleMouseMove} onMouseLeave={() => { setMouseX(0); setMouseY(0); }}>
-      <div className="glass-hud p-4 h-28 flex flex-col justify-between overflow-hidden group">
-        <div className="flex justify-between items-center">
-          <span className="mono-data text-[8px] text-zinc-500">Voltage Meter</span>
-          <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">{currentData.voltage}V</span>
-        </div>
-        <motion.div 
-          animate={{ x: mouseX * 5, y: mouseY * 3 }}
-          transition={{ type: "spring", damping: 25, stiffness: 120 }}
-          className="h-12 w-full mt-2 relative min-h-[48px]"
-        >
-          <ResponsiveContainer width="99%" height="100%" minHeight={48}>
-            <LineChart data={chartsData}>
-              <Line type="step" dataKey="voltage" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </motion.div>
-      </div>
-      <div className="glass-hud p-4 h-28 flex flex-col justify-between overflow-hidden group">
-        <div className="flex justify-between items-center">
-          <span className="mono-data text-[8px] text-zinc-500">Power Usage</span>
-          <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">{Math.round(currentData.power)}W</span>
-        </div>
-        <motion.div 
-          animate={{ x: mouseX * -3, y: mouseY * 6 }}
-          transition={{ type: "spring", damping: 25, stiffness: 120 }}
-          className="h-12 w-full mt-2 relative min-h-[48px]"
-        >
-          <ResponsiveContainer width="99%" height="100%" minHeight={48}>
-            <LineChart data={chartsData}>
-              <YAxis domain={['auto', 'auto']} hide />
-              <Line type="monotone" dataKey="power" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </motion.div>
-      </div>
-      <div className="glass-hud p-4 h-28 flex flex-col justify-between overflow-hidden group">
-        <div className="flex justify-between items-center">
-          <span className="mono-data text-[8px] text-zinc-500">Battery Level</span>
-          <span className="mono-data text-[10px] text-[var(--accent-cyan)] font-bold">{Math.round(currentData.battery)}%</span>
-        </div>
-        <motion.div 
-          animate={{ x: mouseX * 6, y: mouseY * -4 }}
-          transition={{ type: "spring", damping: 25, stiffness: 120 }}
-          className="h-12 w-full mt-2 relative min-h-[48px]"
-        >
-          <ResponsiveContainer width="99%" height="100%" minHeight={48}>
-            <LineChart data={chartsData}>
-              <YAxis domain={[0, 100]} hide />
-              <Line type="monotone" dataKey="battery" stroke="var(--accent-cyan)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </motion.div>
-      </div>
-    </div>
-  );
-};
-
-const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, voiceConfidence, isVoiceVerified }: { 
-  isOpen: boolean, 
-  onClose: () => void, 
-  onSend: (e: React.FormEvent) => void, 
-  input: string, 
-  setInput: (s: string) => void,
-  activeZone: string,
-  voiceConfidence: number,
-  isVoiceVerified: boolean
-}) => (
-  <AnimatePresence>
-    {isOpen && (
-      <motion.div 
-        initial={{ opacity: 0 }} 
-        animate={{ opacity: 1 }} 
-        exit={{ opacity: 0 }} 
-        className="fixed inset-0 bg-black/95 backdrop-blur-2xl z-[200] flex flex-col items-center justify-center p-6 text-center"
-      >
-        <button 
-          onClick={onClose} 
-          className="absolute top-10 right-10 text-zinc-500 hover:text-white p-4 group flex flex-col items-center gap-2"
-        >
-           <VolumeX size={32} />
-           <span className="text-[8px] font-mono opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">[ESC] CLOSE</span>
-        </button>
-
-        <motion.div 
-          animate={{ 
-            scale: isVoiceVerified ? [1, 1.25, 1] : [1, 1.1, 1],
-            boxShadow: isVoiceVerified 
-              ? ["0 0 60px rgba(34,211,238,0.4)", "0 0 120px rgba(34,211,238,0.8)", "0 0 60px rgba(34,211,238,0.4)"]
-              : ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]
-          }}
-          transition={{ duration: isVoiceVerified ? 0.8 : 2, repeat: Infinity }}
-          className={`w-32 h-32 rounded-full border-4 flex items-center justify-center mb-10 transition-all duration-1000 ${isVoiceVerified ? 'bg-cyan-500/10 border-cyan-400 shadow-[0_0_80px_rgba(34,211,238,0.3)]' : 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]'}`}
-        >
-           {isVoiceVerified ? <CheckCircle size={56} className="text-cyan-400" /> : <Mic size={48} className="text-[var(--accent-gold)]" />}
-        </motion.div>
-
-        <div className="max-w-2xl w-full">
-           <div className="flex flex-col items-center gap-4 mb-12">
-              <span className={`mono-data text-xs tracking-[0.5em] uppercase transition-colors duration-500 ${isVoiceVerified ? 'text-cyan-400' : 'text-[var(--accent-gold)]'}`}>
-                {isVoiceVerified ? 'SECURE IDENTITY CONFIRMED' : `Listening in ${activeZone}`}
-              </span>
-               <div className="flex flex-col items-center gap-2 w-full max-w-sm">
-                 <div className="flex items-center justify-between w-full mb-1">
-                    <span className="mono-data text-[8px] text-zinc-500 uppercase tracking-widest">Biometric Match Integrity</span>
-                    <motion.span 
-                      animate={{ scale: [1, 1.1, 1] }}
-                      transition={{ duration: 0.5, repeat: Infinity }}
-                      className={`text-[10px] font-black mono-data ${voiceConfidence > 80 ? 'text-green-500' : 'text-yellow-500'}`}
-                    >
-                      {voiceConfidence.toFixed(1)}%
-                    </motion.span>
-                 </div>
-                 <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                    <motion.div 
-                      key="confidence-meter"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${voiceConfidence}%` }}
-                      transition={{ type: "spring", damping: 15, stiffness: 60 }}
-                      className={`h-full transition-colors duration-1000 ${voiceConfidence > 90 ? 'bg-cyan-400' : voiceConfidence > 80 ? 'bg-green-500' : 'bg-yellow-500'}`}
-                    />
-                 </div>
-                 {isVoiceVerified && (
-                   <motion.span 
-                    initial={{ opacity: 0, y: 5 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="text-[8px] text-cyan-400 font-bold uppercase tracking-[0.3em] mt-2"
-                   >
-                     Signature Verified • Match Confirmed
-                   </motion.span>
-                 )}
-              </div>
-           </div>
-
-           <form onSubmit={onSend} className="relative group">
-              <input 
-                autoFocus
-                placeholder="Declare command..."
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                className="w-full bg-transparent border-b-2 border-white/20 px-4 py-8 text-3xl font-black italic text-white text-center focus:outline-none focus:border-[var(--accent-gold)] transition-all placeholder:text-zinc-800"
-              />
-              <motion.div 
-                animate={{ opacity: [0.2, 0.5, 0.2] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-                className="absolute inset-x-0 -bottom-0.5 h-0.5 bg-[var(--accent-gold)] blur-sm pointer-events-none opacity-0 group-focus-within:opacity-100" 
-              />
-           </form>
-
-           <div className="mt-12 flex flex-wrap justify-center gap-4">
-              {["Set lights to 20%", "Arm security", "Find my phone"].map(cmd => (
-                <button 
-                  key={cmd}
-                  onClick={() => { setInput(cmd); }}
-                  className="px-4 py-2 rounded-full bg-white/5 border border-white/10 text-[10px] font-mono text-zinc-500 hover:text-[var(--accent-gold)] hover:border-[var(--accent-gold)]/30 transition-all"
-                >
-                   {cmd}
-                </button>
-              ))}
-           </div>
-        </div>
-        
-        <div className="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-10 opacity-30">
-           <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-              <span className="mono-data text-[8px] uppercase tracking-widest text-zinc-400">Audio HW Link: Nominal</span>
-           </div>
-           <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-              <span className="mono-data text-[8px] uppercase tracking-widest text-zinc-400">Context Buffering: 0.2ms</span>
-           </div>
-        </div>
-      </motion.div>
-    )}
-  </AnimatePresence>
-);
-
-const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardProps) => {
-  const getIcon = () => {
-    const active = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
-    const color = active ? 'text-[var(--accent-gold)]' : 'text-zinc-600';
-    
-    switch (device.type) {
-      case 'light': return <Lightbulb className={color} size={18} />;
-      case 'lock': return <Lock className={color} size={18} />;
-      case 'climate': return <Thermometer className={color} size={18} />;
-      case 'appliance': return <Zap className={color} size={18} />;
-      case 'sensor': return <Activity className={color} size={18} />;
-      default: return <Settings className={color} size={18} />;
-    }
-  };
-
-  const isActive = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
-  const isCritical = device.state === 'critical' || device.status === 'ERROR' || device.status === 'OFFLINE';
-
-  const handleReboot = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    fetch('/api/devices/lazarus-reboot', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: device.id })
-    });
-  };
-
-  // Mini sparkline mock components
-  const Sparkline = () => (
-    <div className="flex items-end gap-0.5 h-4 opacity-50 px-2">
-      {[12, 18, 14, 22, 19, 25, 20, 24, 15, 21].map((h, i) => (
-        <motion.div 
-          key={i}
-          animate={{ height: isActive ? [`${h}%`, `${h+10}%`, `${h}%`] : '10%' }}
-          transition={{ duration: 1 + Math.random(), repeat: Infinity }}
-          className={`w-0.5 rounded-full ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`}
-        />
-      ))}
-    </div>
-  );
-
-  return (
-    <motion.div 
-      layout
-      onClick={onExpand}
-      className={`glass-hud p-4 flex flex-col group cursor-pointer relative transition-all duration-500 ${isActive ? 'border-[var(--accent-gold)]/40 shadow-[0_0_20px_rgba(250,204,21,0.05)]' : ''} ${isExpanded ? 'col-span-2 row-span-2 ring-1 ring-[var(--accent-gold)]/20' : ''}`}
-    >
-      {/* Pulsing indicator for anomalous devices */}
-      {isCritical && (
-        <motion.div 
-          animate={{ scale: [1, 1.2, 1], opacity: [0.1, 0.3, 0.1] }}
-          transition={{ duration: 1, repeat: Infinity }}
-          className="absolute inset-0 rounded-3xl bg-red-500/20 pointer-events-none"
-        />
-      )}
-
-      <div className="flex items-center justify-between w-full">
-        <div className="flex items-center gap-4">
-          <div className="relative">
-            {isCritical && (
-              <motion.div 
-                animate={{ scale: [1, 1.5, 1], opacity: [1, 0, 1] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-                className="absolute inset-0 rounded-lg bg-red-500/40 blur-md"
-              />
-            )}
-            <div className={`p-3 rounded-lg border transition-all relative z-10 ${isActive ? 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]/20 shadow-[0_0_15px_rgba(250,204,21,0.1)]' : 'bg-white/5 border-white/5'} ${isCritical ? 'border-red-500/40' : ''}`}>
-              {getIcon()}
-            </div>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-bold tracking-tight text-white">{device.name}</span>
-            <div className="flex items-center gap-2">
-              <span className="mono-data text-[9px] text-zinc-500 uppercase">{device.state}</span>
-              <motion.span 
-                 animate={isCritical ? { 
-                   opacity: [0.2, 1, 0.2],
-                   scale: [1, 1.5, 1],
-                   boxShadow: ["0 0 0px rgba(239,68,68,0)", "0 0 10px rgba(239,68,68,0.8)", "0 0 0px rgba(239,68,68,0)"]
-                 } : { opacity: 1, scale: 1 }}
-                 transition={{ duration: 1.5, repeat: Infinity }}
-                 className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : isCritical ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} 
-              />
-              <span className="mono-data text-[7px] text-zinc-600 tracking-widest">{device.status}</span>
-            </div>
-          </div>
-        </div>
-        
-        {/* Real-time Indicator Visualization */}
-        <div className="flex-1 flex justify-end items-center mr-4">
-           {isActive && device.powerUsage > 0 && <Sparkline />}
-           {!isActive && isCritical && (
-             <motion.div 
-               animate={{ opacity: [0.3, 1, 0.3] }}
-               transition={{ duration: 0.8, repeat: Infinity }}
-               className="text-[7px] font-black text-red-500 mono-data uppercase letter-spacing-widest"
-             >
-               Ping Fail
-             </motion.div>
-           )}
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={(e) => { e.stopPropagation(); onToggle(); }}
-            className={`w-10 h-5 rounded-full relative transition-all ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-white/10'}`}
-          >
-            <motion.div 
-              animate={{ x: isActive ? 20 : 0 }}
-              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-lg"
-            />
-          </button>
-        </div>
-      </div>
-
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div 
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="mt-6 border-t border-white/5 pt-6 space-y-6"
-          >
-             <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-                   <span className="mono-data text-[7px] text-zinc-500 block mb-1 uppercase">Signal Strength</span>
-                   <div className="flex items-end gap-0.5 h-3">
-                      {[1,2,3,4,5].map(i => <div key={i} className={`w-1 rounded-full ${i <= 4 ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`} style={{ height: `${i*20}%` }} />)}
-                   </div>
-                </div>
-                <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-                   <span className="mono-data text-[7px] text-zinc-500 block mb-1 uppercase">Relay Path</span>
-                   <span className="text-[10px] font-mono text-zinc-300">HUB_CENTRAL_01</span>
-                </div>
-             </div>
-
-             {device.type === 'light' && (
-                <div className="space-y-3">
-                   <div className="flex justify-between items-center px-1">
-                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Luminance</span>
-                      <span className="text-[10px] font-bold text-[var(--accent-gold)]">85%</span>
-                   </div>
-                   <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-[var(--accent-gold)] w-[85%]" />
-                   </div>
-                </div>
-             )}
-
-             {device.type === 'climate' && (
-                <div className="space-y-3">
-                   <div className="flex justify-between items-center px-1">
-                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Set Point</span>
-                      <span className="text-[10px] font-bold text-[var(--accent-gold)]">22.5°C</span>
-                   </div>
-                   <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-[var(--accent-gold)] w-[65%]" />
-                   </div>
-                </div>
-             )}
-
-             <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={handleReboot}
-                  className="flex-1 py-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-[8px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-                >
-                   <RefreshCw size={10} />
-                   Lazarus Reboot
-                </button>
-             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-};
+import type { Alert, SystemData, TrustLog, TrustLogType } from './types/index.ts';
+import { AIOrb } from './components/AIOrb.tsx';
+import { DigitalTwinMockup } from './components/DigitalTwinMockup.tsx';
+import { TelemetryStrip } from './components/TelemetryStrip.tsx';
+import { VoiceCommandOverlay } from './components/VoiceCommandOverlay.tsx';
+import { DeviceHUDCard } from './components/DeviceHUDCard.tsx';
+import { TrustConsole } from './components/TrustConsole.tsx';
+import { SecurityKeypad } from './components/SecurityKeypad.tsx';
+import { useSystemState } from './hooks/useSystemState.ts';
+import { useSystemSocket } from './hooks/useSystemSocket.ts';
+import { useVoice } from './hooks/useVoice.ts';
 
 export default function App() {
-  const [data, setData] = useState<SystemData | null>(null);
-  const [haStatus, setHaStatus] = useState<HAStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [voltageHistory, setVoltageHistory] = useState<{ time: string, voltage: number }[]>([]);
   const [voiceInput, setVoiceInput] = useState('');
   const [nlpResponse, setNlpResponse] = useState<string | null>(null);
   const [trustScore, setTrustScore] = useState(85);
@@ -571,7 +61,7 @@ export default function App() {
   const [onboardingStep, setOnboardingStep] = useState<'qr' | 'voice' | 'complete'>('qr');
   const [scannedDevices, setScannedDevices] = useState<string[]>([]);
   const [spatialPulseMessage, setSpatialPulseMessage] = useState<string | null>(null);
-  const [trustLogs, setTrustLogs] = useState<{ id: string, message: string, timestamp: string, type: string }[]>([]);
+  const [trustLogs, setTrustLogs] = useState<TrustLog[]>([]);
   const [isLocalConnection, setIsLocalConnection] = useState(false);
   const [isSaaSTier, setIsSaaSTier] = useState(false);
   const [isFindingPhone, setIsFindingPhone] = useState(false);
@@ -592,42 +82,22 @@ export default function App() {
   const [oscillators, setOscillators] = useState<OscillatorNode[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [guestSessions, setGuestSessions] = useState<any[]>([]);
-  const [voiceSettings, setVoiceSettings] = useState<any>({ persona: 'Ujo', pitch: 1.0, speechRate: 1.0 });
+  const [showKeypad, setShowKeypad] = useState(false);
+  const [pinBuffer, setPinBuffer] = useState('');
+  const [lockedActionID, setLockedActionID] = useState<string | null>(null);
 
-  const audioContextRef = React.useRef<AudioContext | null>(null);
   const ambientAudioRef = React.useRef<AudioContext | null>(null);
 
-  const getTTSContext = () => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    }
-    return audioContextRef.current;
-  };
+  const { voiceSettings, speakResponse, fetchVoiceSettings, saveVoiceSettings } = useVoice(
+    isGlobalMuted,
+    isSaaSTier
+  );
 
   const fetchGuestSessions = async () => {
     try {
       const res = await fetch('/api/security/guest-sessions');
       const json = await res.json();
       setGuestSessions(json);
-    } catch (e) { console.error(e); }
-  };
-
-  const fetchVoiceSettings = async () => {
-    try {
-      const res = await fetch('/api/voice/settings');
-      const json = await res.json();
-      setVoiceSettings(json);
-    } catch (e) { console.error(e); }
-  };
-
-  const saveVoiceSettings = async (settings: any) => {
-    try {
-      await fetch('/api/voice/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
-      });
-      setVoiceSettings(settings);
     } catch (e) { console.error(e); }
   };
 
@@ -653,9 +123,13 @@ export default function App() {
   useEffect(() => {
     fetchGuestSessions();
     fetchVoiceSettings();
-  }, [showSettings]);
+  }, [showSettings, fetchVoiceSettings]);
 
-  const addTrustLog = (message: string, type: 'success' | 'warning' | 'info' | 'error' = 'info') => {
+  useEffect(() => {
+    if (pinBuffer.length === 4) void submitPin();
+  }, [pinBuffer]);
+
+  const addTrustLog = useCallback((message: string, type: TrustLogType = 'info') => {
     const log = {
       id: Math.random().toString(36).substr(2, 9),
       message,
@@ -667,7 +141,32 @@ export default function App() {
     // Update Trust Score
     const scoreMap = { success: 1, warning: -2, info: 0, error: -5 };
     setTrustScore(prev => Math.min(100, Math.max(0, prev + scoreMap[type])));
-  };
+  }, []);
+
+  const {
+    data,
+    setData,
+    haStatus,
+    setHaStatus,
+    loading,
+    voltageHistory,
+    setVoltageHistory,
+    fetchStates,
+  } = useSystemState(speakResponse);
+
+  useSystemSocket({
+    setData,
+    setHaStatus,
+    setVoltageHistory,
+    setTrustLogs,
+    speakResponse,
+    addTrustLog,
+    setShowVoiceOverlay,
+    setNlpResponse,
+    setSpatialPulseMessage,
+    setIsLocalConnection,
+    fetchStates,
+  });
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -802,98 +301,6 @@ export default function App() {
     return "Good evening";
   };
 
-  const speakResponse = async (text: string) => {
-    if (isGlobalMuted) return;
-    try {
-      // 1. High-Fidelity Cloud Voice (SaaS Tier Simulation)
-      const persona = voiceSettings.persona || 'Ujo';
-      // Selecting the most natural voices available in the model
-      const voiceName = persona === 'Jarvis' ? 'Charon' : persona === 'Samantha' ? 'Puck' : 'Fenrir'; 
-      
-      const ttsResp = await ai.models.generateContent({
-         model: "gemini-3.1-flash-tts-preview",
-         contents: [{ parts: [{ text: text }] }],
-         config: {
-           responseModalities: [Modality.AUDIO],
-           speechConfig: {
-             voiceConfig: { prebuiltVoiceConfig: { voiceName } }
-           }
-         }
-      });
-      
-      const base64Audio = ttsResp.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-         const binaryString = atob(base64Audio);
-         const bytes = new Uint8Array(binaryString.length);
-         for (let i = 0; i < binaryString.length; i++) {
-             bytes[i] = binaryString.charCodeAt(i);
-         }
-         
-         const audioContext = getTTSContext();
-         if (audioContext.state === 'suspended') {
-           await audioContext.resume();
-         }
-         const audioBuffer = audioContext.createBuffer(1, bytes.length / 2, 24000);
-         const channelData = audioBuffer.getChannelData(0);
-         const dataView = new DataView(bytes.buffer);
-         
-         for (let i = 0; i < bytes.length / 2; i++) {
-           channelData[i] = dataView.getInt16(i * 2, true) / 32768.0;
-         }
-         
-         const source = audioContext.createBufferSource();
-         source.buffer = audioBuffer;
-         // Applied dynamic rate and pitch
-         source.playbackRate.value = voiceSettings.speechRate || 1.0; 
-         source.detune.value = (voiceSettings.pitch - 1.0) * 1200; // 1200 cents per octave
-         source.connect(audioContext.destination);
-         source.start();
-         
-         return;
-      }
-    } catch (e) {
-      console.warn("Cloud TTS failed, falling back to enhanced local engine:", e);
-    }
-    
-    // 2. Enhanced Local Fallback (Free Tier - Non-Robotic)
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.pitch = voiceSettings.pitch || 1.0;
-    utterance.rate = voiceSettings.speechRate || 1.0;
-    
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) {
-      // Prioritize modern Neural/Natural voices over legacy robotic ones
-      const preferredVoices = voices.sort((a, b) => {
-        const score = (v: SpeechSynthesisVoice) => {
-          if (v.name.includes('Natural')) return 10;
-          if (v.name.includes('Neural')) return 9;
-          if (v.name.includes('Google') && v.name.includes('UK')) return 8;
-          if (v.name.includes('Google') && v.name.includes('US')) return 7;
-          if (v.name.includes('Samantha')) return 6;
-          return 0;
-        };
-        return score(b) - score(a);
-      });
-      
-      if (preferredVoices.length > 0) {
-        utterance.voice = preferredVoices[0];
-      }
-    }
-
-    // Proportional Prosody: Humans vary pitch and rate slightly
-    utterance.pitch = isSaaSTier ? 1.05 : 0.95; 
-    utterance.rate = isSaaSTier ? 0.95 : 1.02; // SaaS is smoother/slower, Free is efficient but clear
-    
-    window.speechSynthesis.speak(utterance);
-  };
-
-  useEffect(() => {
-    // Initial fetch
-    fetchStates();
-  }, []);
-
   const sendVoiceCommand = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!voiceInput.trim()) return;
@@ -962,155 +369,12 @@ export default function App() {
     }
   };
 
-  const fetchStates = async () => {
-    try {
-      const fetchWithLog = async (url: string) => {
-        try {
-          const res = await fetch(url);
-          if (!res.ok) {
-            console.warn(`Fetch to ${url} returned ${res.status}`);
-          }
-          return res;
-        } catch (err) {
-          console.error(`Fetch to ${url} network error:`, err);
-          throw err;
-        }
-      };
-
-      const [resStates, resHa] = await Promise.all([
-        fetchWithLog('/api/states'),
-        fetchWithLog('/api/ha/status')
-      ]);
-
-      if (!resStates.ok || !resHa.ok) {
-        throw new Error(`Server returned error: ${resStates.status} / ${resHa.status}`);
-      }
-
-      const jsonStates = await resStates.json();
-      const jsonHa = await resHa.json();
-      
-      // Proactive Update Speak
-      setData(prevData => {
-        if (jsonStates.updateAvailable && !prevData?.updateAvailable) {
-          speakResponse("A system software update is available. Please review the details in the command center.");
-        }
-
-        // Proactive Alerts Speak
-        if (jsonStates.alerts) {
-          const newAlerts = jsonStates.alerts.filter((a: Alert) => !prevData?.alerts?.some((da: Alert) => da.id === a.id));
-          newAlerts.forEach((alert: Alert) => {
-            speakResponse(`New system alert: ${alert.title}. ${alert.message}`);
-          });
-        }
-        return jsonStates;
-      });
-
-      // Update Voltage History
-      setVoltageHistory(prev => {
-        const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage: jsonStates.energy.voltage }];
-        return newHistory.slice(-20); // Keep last 20 points
-      });
-      
-      setHaStatus(jsonHa);
-      setLoading(false);
-    } catch (err) {
-      if (err instanceof Error) {
-        console.error('Failed to fetch data:', err.name, err.message);
-      } else {
-        console.error('Failed to fetch data:', err);
-      }
-    }
-  };
-
-  useEffect(() => {
-    fetchStates();
-    
-    // WebSockets implementation to replace polling
-    const socket = io();
-    socket.on('state_update', (jsonStates) => {
-      setData(prevData => {
-        // Proactive Update Speak
-        if (jsonStates.updateAvailable && !prevData?.updateAvailable) {
-          speakResponse("A system software update is available. Please review the details in the command center.");
-        }
-
-        // Proactive Alerts Speak
-        if (jsonStates.alerts) {
-          const newAlerts = jsonStates.alerts.filter((a: Alert) => !prevData?.alerts?.some((da: Alert) => da.id === a.id));
-          newAlerts.forEach((alert: Alert) => {
-            speakResponse(`New system alert: ${alert.title}. ${alert.message}`);
-          });
-        }
-        
-        return jsonStates;
-      });
-
-      // Update Voltage History
-      setVoltageHistory(prev => {
-        const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage: jsonStates.energy.voltage }];
-        return newHistory.slice(-20); // Keep last 20 points
-      });
-    });
-
-    socket.on('trust_log_update', (log) => {
-      setTrustLogs(prev => [log, ...prev].slice(0, 20));
-      // Speak the log if it's high severity
-      if (log.message.includes('CRITICAL') || log.message.includes('ALERT')) {
-        speakResponse(log.message);
-      }
-    });
-
-    socket.on('sensor_update', (payload) => {
-      // Logic for chart or real-time sensor text
-      if (payload.topic.includes('power/grid')) {
-        setVoltageHistory(prev => {
-          const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage: payload.data.voltage }];
-          return newHistory.slice(-20);
-        });
-      }
-    });
-
-    socket.on('motion-detected', (payload: { room: string, timestamp: string }) => {
-       addTrustLog(`MOTION_SENSOR: Activity detected in ${payload.room}`, 'warning');
-       if (payload.room === 'Living Room') {
-         setShowVoiceOverlay(true);
-         setNlpResponse(`Motion detected in ${payload.room}. Activating peripheral surveillance.`);
-         // Auto-clear after 8s
-         setTimeout(() => {
-           setNlpResponse(null);
-           setShowVoiceOverlay(false);
-         }, 8000);
-       }
-    });
-
-    socket.on('phone_sonar_active', (payload) => {
-       setSpatialPulseMessage(`SONAR_PING_ACTIVE: ${payload.room}`);
-       setTimeout(() => setSpatialPulseMessage(null), 10000);
-    });
-
-    const p2pInterval = setInterval(checkP2P, 10000);
-    checkP2P();
-
-    // Fallback polling for HA
-    const interval = setInterval(() => {
-      fetch('/api/ha/status')
-        .then(res => res.json())
-        .then(jsonHa => setHaStatus(jsonHa))
-        .catch(() => {});
-    }, 5000);
-
-    return () => {
-      clearInterval(interval);
-      socket.disconnect();
-    };
-  }, []);
-
-  const [showKeypad, setShowKeypad] = useState(false);
-  const [pinBuffer, setPinBuffer] = useState('');
-  const [lockedActionID, setLockedActionID] = useState<string | null>(null);
-
   const handleKeypadPress = (num: string) => {
-    if (pinBuffer.length < 4) setPinBuffer(prev => prev + num);
+    if (num === 'back') {
+      setPinBuffer((prev) => prev.slice(0, -1));
+      return;
+    }
+    if (pinBuffer.length < 4) setPinBuffer((prev) => prev + num);
   };
 
   const submitPin = async () => {
@@ -1124,6 +388,8 @@ export default function App() {
       if (result.success) {
         setShowKeypad(false);
         setPinBuffer('');
+        setLockedActionID(null);
+        fetchStates();
         speakResponse(result.message);
       } else {
         speakResponse("Access denied. Invalid signature.");
@@ -1259,7 +525,11 @@ export default function App() {
   };
 
   const simulateMotion = async () => {
-    await fetch('/api/motion', { method: 'POST' });
+    await fetch('/api/motion/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room: 'Living Room' }),
+    });
     fetchStates();
   };
 
@@ -1290,13 +560,6 @@ export default function App() {
     });
     fetchStates();
     speakResponse(`Voice personality changed to ${persona}.`);
-  };
-
-  const checkP2P = async () => {
-    // Simulation: randomly switch between local and cloud to demo the fluid switching
-    const res = await fetch(`/api/network/p2p-check?local=${Math.random() > 0.5}`);
-    const json = await res.json();
-    setIsLocalConnection(json.local);
   };
 
   const findMyPhone = async () => {
@@ -1767,13 +1030,15 @@ export default function App() {
           <DigitalTwinMockup />
           
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-             {data.devices.map(dev => (
-               <DeviceHUDCard 
-                 key={dev.id} 
-                 device={dev} 
-                 onToggle={() => toggleDevice(dev.id, dev.state)} 
-                 isExpanded={expandedDeviceId === dev.id}
-                 onExpand={() => setExpandedDeviceId(expandedDeviceId === dev.id ? null : dev.id)}
+             {data.devices.map((device) => (
+               <DeviceHUDCard
+                 key={device.id}
+                 device={device}
+                 onToggle={() => toggleDevice(device.id, device.state)}
+                 isExpanded={expandedDeviceId === device.id}
+                 onExpand={() =>
+                   setExpandedDeviceId(expandedDeviceId === device.id ? null : device.id)
+                 }
                />
              ))}
           </div>
@@ -1781,55 +1046,7 @@ export default function App() {
           <TelemetryStrip history={voltageHistory} />
         </div>
 
-        {/* Right: Trust Console & Analytics */}
-        <div className="col-span-12 lg:col-span-3 flex flex-col gap-6">
-           
-           {/* The Trust Terminal */}
-           <div className="glass-hud flex flex-col h-[400px] border-dashed">
-              <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
-                <span className="mono-data text-[10px] text-[var(--accent-gold)] font-bold">Autonomous Decision Log</span>
-                <div className="w-2 h-2 rounded-full bg-[var(--accent-gold)] animate-pulse" />
-              </div>
-              <div className="p-4 flex-1 overflow-y-auto space-y-4 custom-scrollbar">
-                {trustLogs.length === 0 ? (
-                  <p className="text-[10px] text-zinc-600 font-mono py-4">SYSTEM_IDLE: Awaiting context vectors...</p>
-                ) : (
-                  trustLogs.map((log) => (
-                    <div 
-                      key={log.id} 
-                      className={`text-[11px] font-mono leading-relaxed ${log.message.includes('CRITICAL') ? 'text-red-400' : 'text-zinc-400'}`}
-                    >
-                      <span className="opacity-40 text-[9px] mr-2">[{new Date(log.timestamp).toLocaleTimeString([], { hour12: false })}]</span>
-                      {log.message}
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="p-4 border-t border-white/10 bg-black/40">
-                <span className="text-[8px] mono-data tech-text-dim">FRIDAY_CORE: Ready to intervene</span>
-              </div>
-           </div>
-
-           <div className="glass-hud p-6">
-              <span className="mono-data text-[10px] text-zinc-400 block mb-2 tracking-widest">Bridged Matrix Status</span>
-              <div className="flex items-center gap-4 p-3 bg-white/5 border border-white/10 rounded-xl">
-                 <div className={`indicator ${haStatus?.connected ? 'active' : ''}`} />
-                 <div className="flex-1">
-                   <span className="block text-[10px] font-black uppercase text-white">{haStatus?.hub}</span>
-                   <span className="text-[8px] mono-data tech-text-dim">{haStatus?.syncedDevices} Entities Linked</span>
-                 </div>
-                 <button onClick={syncHA} className="p-2 text-zinc-500 hover:text-white">
-                   <RefreshCw size={12} />
-                 </button>
-              </div>
-           </div>
-
-           <div className="glass-hud p-6 bg-gradient-to-br from-[var(--accent-gold)]/5 to-transparent">
-              <span className="mono-data text-[10px] text-zinc-400 block mb-4 uppercase">Load Shedding Impact</span>
-              <span className="block text-3xl font-black italic text-[var(--accent-gold)]">142.8 kWh</span>
-              <span className="text-[9px] mono-data text-zinc-500 tracking-tighter mt-1 block">Cumulative offset since activation</span>
-           </div>
-        </div>
+        <TrustConsole trustLogs={trustLogs} haStatus={haStatus} onSyncHA={syncHA} />
 
       </div>
 
@@ -1852,6 +1069,18 @@ export default function App() {
         activeZone={activeZone}
         voiceConfidence={voiceConfidence}
         isVoiceVerified={isVoiceVerified}
+      />
+
+      <SecurityKeypad
+        isOpen={showKeypad}
+        pin={pinBuffer}
+        onPress={handleKeypadPress}
+        onClear={() => setPinBuffer('')}
+        onClose={() => {
+          setShowKeypad(false);
+          setPinBuffer('');
+          setLockedActionID(null);
+        }}
       />
 
       {/* VAULT AUTH MODAL */}
@@ -2002,29 +1231,32 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* HITL Alerts Overlay */}
+      {/* HITL Alerts Overlay — one card at a time; multiple DB alerts stack confusingly */}
       <AnimatePresence>
-        {data.alerts.length > 0 && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl grid place-items-center p-6 text-center">
-            {data.alerts.map((alert) => (
-              <motion.div key={alert.id} initial={{ scale: 0.9, y: 30 }} animate={{ scale: 1, y: 0 }} className="max-w-lg w-full glass-hud border-t-8 border-t-[var(--alert-red)] p-10">
+        {data && data.alerts.length > 0 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center gap-4 p-6 text-center">
+            {data.alerts.length > 1 && (
+              <p className="mono-data text-[10px] text-zinc-500 uppercase tracking-widest">
+                {data.alerts.length - 1} more in queue after this action
+              </p>
+            )}
+            <motion.div key={data.alerts[0].id} initial={{ scale: 0.9, y: 30 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 30 }} className="max-w-lg w-full glass-hud border-t-8 border-t-[var(--alert-red)] p-10">
                 <div className="flex flex-col items-center mb-8">
                   <div className="p-4 bg-red-500/10 rounded-full text-red-500 shadow-lg mb-6">
                     <AlertTriangle size={48} />
                   </div>
-                  <h3 className="text-2xl font-black uppercase tracking-tight italic mb-2">{alert.title}</h3>
+                  <h3 className="text-2xl font-black uppercase tracking-tight italic mb-2">{data.alerts[0].title}</h3>
                   <p className="mono-data text-[10px] text-red-500 mb-6">Intervention Required</p>
-                  <p className="text-zinc-200 text-lg leading-relaxed font-medium">"{alert.message}"</p>
+                  <p className="text-zinc-200 text-lg leading-relaxed font-medium">"{data.alerts[0].message}"</p>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-4">
-                  <button onClick={() => confirmAlert(alert.id, 'Ignore')} className="py-5 px-6 rounded-xl font-bold text-zinc-500 bg-white/5 hover:bg-white/10 transition-all uppercase text-[10px] tracking-widest">Decline</button>
-                  <button onClick={() => confirmAlert(alert.id, 'Confirm')} className="py-5 px-6 rounded-xl font-black bg-[var(--alert-red)] text-white hover:scale-[1.02] transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3">
+                  <button type="button" onClick={() => confirmAlert(data.alerts[0].id, 'Ignore')} className="py-5 px-6 rounded-xl font-bold text-zinc-500 bg-white/5 hover:bg-white/10 transition-all uppercase text-[10px] tracking-widest">Decline</button>
+                  <button type="button" onClick={() => confirmAlert(data.alerts[0].id, 'Confirm')} className="py-5 px-6 rounded-xl font-black bg-[var(--alert-red)] text-white hover:scale-[1.02] transition-all uppercase text-[10px] tracking-widest flex items-center justify-center gap-3">
                     Confirm Action
                   </button>
                 </div>
               </motion.div>
-            ))}
           </motion.div>
         )}
       </AnimatePresence>

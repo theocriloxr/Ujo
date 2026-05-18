@@ -55,5 +55,5 @@ This document outlines how to move the code from this environment onto your phys
 ## 4. First Run Logic
 When you first boot the system on your Pi:
 1. Connect your phone to the same Wi-Fi.
-2. Navigate to `http://<pi-ip-address>:3000`.
+2. Navigate to `http://<pi-ip-address>:3005`.
 3. Ujo will detect it's the "First Run" and trigger the **Neural Link** greeting and hardware scan you see in the current prototype.

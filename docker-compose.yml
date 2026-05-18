@@ -6,17 +6,18 @@ services:
     container_name: ujo-core
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3005:3005"
     environment:
       - NODE_ENV=production
+      - PORT=3005
+      - DATABASE_URL=file:/app/data/ujo_os_v2.db
       - JWT_SECRET=${JWT_SECRET}
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
     volumes:
+      # SQLite file at DATABASE_URL (file:/app/data/ujo_os_v2.db)
       - ujo_data:/app/data
-    network_mode: "host" # Better for local IoT discovery (mDNS/Zeroconf)
+    network_mode: "host" # mDNS/Zeroconf for local IoT; app listens on host PORT (3005)
 
-  # Optional edge proxy (Nginx) and time-series DB (InfluxDB) could go here
-  
 volumes:
   ujo_data:

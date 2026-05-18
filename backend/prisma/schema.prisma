@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./ujo_os_v2.db"
+  url      = env("DATABASE_URL")
 }
 
 // Enterprise-Grade Smart Home Hub Schema

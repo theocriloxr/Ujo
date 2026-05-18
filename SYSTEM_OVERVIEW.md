@@ -1,93 +1,78 @@
 # Ujo OS: Comprehensive System Documentation
 
 ## Project Overview
-**Ujo OS** is a sophisticated, full-stack Smart Home Operating System designed for privacy, efficiency, and proactive intelligence. It integrates local hardware control, AI-driven assistant capabilities, energy management, and advanced security protocols.
+
+**Ujo OS** is a full-stack smart home operating system for privacy-conscious, power-aware homes (e.g. inverter/grid scenarios, domestic staff access, dialect intercom). Most hardware integrations are simulated; the architecture supports real MQTT, Home Assistant, and edge devices.
 
 ---
 
 ## Technical Stack
-- **Frontend**: React 19, TypeScript, Vite.
-- **Backend**: Node.js, Express, Socket.io (for real-time events).
-- **Database**: SQLite (local persistence).
-- **AI/ML**: Google Gemini (Flash 3.1) for Natural Language Processing and Text-to-Speech (TTS).
-- **Styling**: Tailwind CSS with Framer Motion (for animations).
-- **Icons**: Lucide React.
-- **Data Visualization**: Recharts (for energy and voltage tracking).
+
+- **Frontend**: React 19, TypeScript, Vite (dev server **:5173**).
+- **Backend**: Node.js, Express, Socket.io (**:3005**).
+- **Database**: SQLite via Prisma (`backend/prisma/ujo_os_v2.db`).
+- **AI**: Google Gemini (NLP + TTS on the client when `GEMINI_API_KEY` is set).
+- **Styling**: Tailwind CSS, Framer Motion (`motion`), Recharts.
 
 ---
 
 ## Core File Structure
 
-### Backend Entry Point (`/server.ts`)
-- **What it does**: Handles the Express API, Socket.io server, and database operations.
-- **How it works**: 
-  - Initializes a local SQLite database (`ujo_os_v2.db`) with tables for devices, configurations, alerts, and access profiles.
-  - Manages a **StateManager** class that centralizes the logic for device state updates, energy load shedding, and duress protocols.
-  - Hosts the REST API for state fetching, NLP parsing, and simulation triggers.
-  - Integrates with the `HABridge` for Home Assistant synchronization.
+### Backend (`backend/`)
 
-### Home Assistant Bridge (`/ha_bridge.ts`)
-- **What it does**: Provides a prototype interface to communicate with a local Home Assistant instance.
-- **How it works**: Uses WebSockets to connect to the Home Assistant API, allowing Ujo OS to act as a unified control plane for multiple ecosystems.
+| Path | Role |
+|------|------|
+| `server.ts` | Bootstrap: seed data, MQTT, HA bridge, route mount, Vite/static in prod |
+| `services/StateManager.ts` | Device/mode/power state, alerts, NLP, motion, duress |
+| `routes/*.ts` | REST API split by domain |
+| `services/ProactiveEngine.ts` | Background proactive checks |
+| `services/TranslatorService.ts` | Dialect translation (Gemini, guarded) |
+| `ha_bridge.ts` | Home Assistant WebSocket prototype |
 
-### Frontend Application (`/src/App.tsx`)
-- **What it does**: The user interface for the system.
-- **How it works**:
-  - Connects to the server via WebSockets for instant state updates (e.g., when a device state changes or an anomaly is detected).
-  - Uses the **@google/genai SDK** directly on the client for natural voice synthesis (AI TTS).
-  - Implements a "Bento Grid" dashboard for intuitive control.
-  - Contains advanced sub-modules like the **Security Keypad**, **Predictive Energy Charts**, and **Spatial Presence Logs**.
+### Frontend (`frontend/src/`)
+
+| Path | Role |
+|------|------|
+| `App.tsx` | Layout, modals, voice/security flows, API actions |
+| `hooks/useSystemState.ts` | Poll `/api/states` and HA status |
+| `hooks/useSystemSocket.ts` | Socket.io live updates |
+| `components/` | `DeviceHUDCard`, `DigitalTwinMockup`, `TelemetryStrip`, `VoiceCommandOverlay`, `AIOrb` |
 
 ---
 
 ## Key System Features
 
-### 1. AI Assistant (Ujo)
-- **Use**: Natural language interaction with the home.
-- **Implementation**: Frontend uses Gemini Flash to take user speech/text, while the backend parses intents (multi-intent support) to execute commands like "Turn on lights and lock the door."
-- **Natural Voice**: Uses `gemini-3.1-flash-tts-preview` for human-like auditory feedback, with custom personas like *Onyx* (deep/calm) and *Jarvis* (British/technical).
+### AI Assistant (Ujo)
 
-### 2. Grid Guardian: Selective Energy Management
-- **Use**: Protects battery life during power outages while respecting the inverter's actual capacity.
-- **Implementation**: 
-  - **Selective Load Shedding**: Users can mark specific "Heavy" appliances (e.g., a specific high-rated AC) as **"Bypass"**, allowing them to run on the inverter if the hardware is rated for it.
-  - **Autonomous Intervention**: For devices marked as **"Shed"**, the system automatically shuts them down when the power source switches to 'Inverter'.
-  - **Proactive Monitoring**: The Proactive Engine continuously scans for un-authorized heavy loads when on battery and force-shuts them down to prevent inverter trip-outs.
+Natural language via `POST /api/nlp-parse`; client-side TTS via Gemini when configured, with browser `speechSynthesis` fallback.
 
-### 3. Duress Protocol (Silent Security)
-- **Use**: Protects residents during forced entries.
-- **Implementation**: The door lock accepts two PINs:
-  - **Normal PIN (1234)**: Unlocks the door normally.
-  - **Duress PIN (9999)**: Unlocks the door but silently flags the system as "Duress Active," triggering critical security alerts without notifying the intruder.
+### Grid Guardian
 
-### 4. Domestic Staff Access Control
-- **Use**: Manages temporary access for cleaners or maintenance staff.
-- **Implementation**: Assigns time-and-day-based profiles (e.g., "Access allowed only on Tuesdays 10:00 - 14:00"). Access attempts outside these windows trigger unauthorized access alerts.
+Selective load shedding when power source is `INVERTER`; per-device `isSheddable` flags.
 
-### 5. Proactive Anomaly Detection (HITL)
-- **Use**: Predicts maintenance needs and security breaches.
-- **Implementation**: The system monitors device power signatures (e.g., Fridge compressor spikes) and environmental sensors (CO2 levels). It uses **Human-in-the-Lopp (HITL)** logic, where critical actions (like shutting down a failing appliance) require user confirmation via a persistent alert system.
+### Duress Protocol
 
-### 6. Spatial Presence & Ghosting Resolution
-- **Use**: Resolves sensor confusion in multi-user environments.
-- **Implementation**: Simulates sensor fusion between mmWave radar and local vision (ESP32-CAM embeddings). If radar "ghosts" (loses track of which person is which), the system uses voice-print biometrics and vision embeddings to "re-anchor" identity and keep controls locked to the correct user.
+Dual PIN on `POST /api/security/unlock` (normal vs silent duress).
 
-### 7. Guest Access (Secure QR)
-- **Use**: Simple, secure access for visitors.
-- **Implementation**: Generates a temporary, time-bound **JWT (JSON Web Token)** encoded into a scanable QR code, allowing guests limited control over specific rooms (e.g., the Living Room) for a short duration.
+### Staff Access
+
+Time-window profiles via `POST /api/access/staff-auth`.
+
+### Guest QR
+
+JWT guest sessions via `POST /api/security/guest-code`.
 
 ---
 
 ## Database Schema (Summary)
-- `devices`: IDs, names, types, current states, and "Load Category" (Essential vs. Heavy).
-- `system_config`: Global settings like current mode (Standard/Away), software version, and subscription status.
-- `alerts`: Log of all detected anomalies with severity tiers (Low, Medium, High, Critical).
-- `access_profiles`: Whitelist for domestic staff and temporary visitors.
-- `voice_settings`: Customizable AI persona parameters (Pitch, Rate, Accent).
+
+- `Device`, `SystemConfig`, `Alert`, `AccessProfile`, `VoiceSettings`, `GuestSession`, `SecurityAudit`, `EnergyTelemetry`
 
 ---
 
-## Deployment & Updates
-- **OTA Strategy**: System is designed to support Over-The-Air updates via a subscription-based "Ujo Cloud" module.
-- **Containerization**: Deployable via Docker with provided `Dockerfile` and `docker-compose.yml`.
-- **System Service**: Includes `ujo-os.service` configuration for Linux systemd integration.
+## Deployment
+
+- **Dev**: `npm run install:all` then `npm run dev` → frontend :5173, backend :3005.
+- **Prod**: `npm run build` then `npm start` (or Docker on port **3005**).
+- **Env**: See `.env.example` (`DATABASE_URL`, `GEMINI_API_KEY`, `JWT_SECRET`, `HA_URL`, `HA_TOKEN`).
+- **systemd**: `ujo-os.service` for Linux edge deployment.

@@ -1,0 +1,45 @@
+{
+  "name": "ujo-backend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "DATABASE_URL=${DATABASE_URL:-file:./ujo_os_v2.db} prisma generate --schema=./prisma/schema.prisma && DATABASE_URL=${DATABASE_URL:-file:./ujo_os_v2.db} prisma db push --accept-data-loss --schema=./prisma/schema.prisma && node --experimental-strip-types server.ts",
+    "predev": "lsof -ti:3005 2>/dev/null | xargs kill -9 2>/dev/null || true",
+    "dev": "DATABASE_URL=file:./ujo_os_v2.db STANDALONE_BACKEND=1 tsx server.ts",
+    "db:generate": "prisma generate --schema=./prisma/schema.prisma",
+    "db:push": "prisma db push --accept-data-loss --schema=./prisma/schema.prisma",
+    "postinstall": "prisma generate --schema=./prisma/schema.prisma",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^1.51.0",
+    "@matter/main": "^0.16.11",
+    "@matter/nodejs": "^0.16.11",
+    "@prisma/client": "^6.4.1",
+    "cors": "^2.8.6",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "mqtt": "^5.15.1",
+    "node-cron": "^4.2.1",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.3",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.14.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/sqlite3": "^3.1.11",
+    "@types/ws": "^8.18.1",
+    "dotenv": "^17.2.3",
+    "prisma": "^6.4.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  }
+}
