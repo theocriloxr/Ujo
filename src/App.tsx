@@ -159,27 +159,169 @@ const AIOrb = ({ active, isVerified }: { active: boolean, isVerified?: boolean }
   </div>
 );
 
-const DigitalTwinMockup = () => (
-  <div className="relative w-full h-[300px] lg:h-[500px] overflow-hidden rounded-3xl group">
-    <div className="absolute inset-0 opacity-20" 
-      style={{
-        backgroundImage: `linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)`,
-        backgroundSize: '40px 40px',
-        transform: 'perspective(1000px) rotateX(60deg) translateY(-100px)',
-        transformOrigin: 'top'
-      }} 
-    />
-    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-       <div className="w-64 h-64 border border-[var(--accent-gold)]/20 rounded-lg transform rotate-45 animate-pulse" />
-       <div className="absolute w-48 h-48 border border-[var(--accent-cyan)]/20 rounded-lg transform rotate-45 scale-75" />
-       <div className="absolute w-full h-full bg-gradient-to-t from-[#050505] via-transparent to-transparent" />
+const DigitalTwinMockup = ({ alerts = [], spatialPulseMessage, expandedDeviceId, setExpandedDeviceId }: any) => {
+  const [cameraFeedActive, setCameraFeedActive] = useState(false);
+  const [alertLocation, setAlertLocation] = useState('Unknown Location');
+
+  useEffect(() => {
+    if (alerts.length > 0) {
+      setCameraFeedActive(true);
+      setAlertLocation(alerts[0]?.message.split(' ').slice(4).join(' ') || 'Front Door');
+    } else {
+      setCameraFeedActive(false);
+    }
+  }, [alerts]);
+
+  const pingRoom = spatialPulseMessage?.replace('SONAR_PING_ACTIVE: ', '')?.toLowerCase() || null;
+
+  return (
+    <div className="relative w-full h-[300px] lg:h-[500px] overflow-hidden rounded-3xl bg-[#080808] border border-white/5 group shadow-2xl">
+      <div className="absolute inset-0 opacity-10" 
+        style={{
+          backgroundImage: `linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)`,
+          backgroundSize: '40px 40px',
+          transform: 'perspective(1000px) rotateX(60deg) translateY(-100px)',
+          transformOrigin: 'top'
+        }} 
+      />
+      
+      {/* 3D Isometric Home Layout */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-auto">
+        <motion.div 
+          initial={false}
+          animate={{ scale: expandedDeviceId ? 0.9 : 1 }}
+          transition={{ duration: 1, ease: 'easeOut' }}
+          className="relative w-[300px] h-[300px] lg:w-[400px] lg:h-[400px] transform transition-transform duration-1000" 
+          style={{ transform: 'perspective(1200px) rotateX(60deg) rotateZ(45deg)' }}
+        >
+          {/* Base Platform */}
+          <div className="absolute inset-x-0 bottom-0 top-10 lg:top-0 bg-white/5 border border-white/10 shadow-[0_50px_100px_rgba(0,0,0,1)]" />
+
+          {/* Rooms Map */}
+          {[
+            { id: 'living', name: 'Living Room', x: '10%', y: '10%', w: '40%', h: '40%' },
+            { id: 'kitchen', name: 'Kitchen', x: '50%', y: '10%', w: '40%', h: '30%' },
+            { id: 'bedroom', name: 'Master Bedroom', x: '50%', y: '40%', w: '40%', h: '50%' },
+            { id: 'hallway', name: 'Hallway', x: '10%', y: '50%', w: '40%', h: '40%' },
+          ].map((room) => {
+             const isAlert = alerts.some((a: any) => a.message.toLowerCase().includes(room.name.toLowerCase()));
+             const isPinged = pingRoom === room.name.toLowerCase();
+             
+             // Expand mapping: check if the expanded device name implies this room
+             const isExpanded = expandedDeviceId && String(expandedDeviceId).toLowerCase().includes(room.name.split(' ')[0].toLowerCase());
+             const isActive = isExpanded || isAlert || isPinged;
+
+             return (
+               <div
+                 key={room.id}
+                 className={`absolute transition-all duration-700 cursor-pointer overflow-visible ${
+                   isAlert ? 'bg-red-500/20 shadow-[inset_0_0_20px_rgba(239,68,68,0.5)]' 
+                   : isExpanded ? 'bg-cyan-500/10 shadow-[inset_0_0_15px_rgba(34,211,238,0.3)] border-transparent' 
+                   : isPinged ? 'bg-cyan-500/20 border-cyan-400'
+                   : 'bg-white/5 border-white/10 hover:bg-white/10'
+                 }`}
+                 style={{ left: room.x, top: room.y, width: room.w, height: room.h }}
+                 onClick={() => setExpandedDeviceId?.(expandedDeviceId === room.name ? null : room.name)}
+               >
+                  {/* Walls (3D illusion) */}
+                  <div className={`absolute top-0 right-[-5px] w-[5px] h-full origin-left skew-y-[-45deg] bg-white/10 pointer-events-none transition-colors duration-700 ${isAlert ? 'bg-red-500/30' : ''}`} />
+                  <div className={`absolute bottom-[-5px] left-0 w-full h-[5px] origin-top skew-x-[-45deg] bg-white/5 pointer-events-none transition-colors duration-700 ${isAlert ? 'bg-red-500/20' : ''}`} />
+
+                  {/* Hotspot node indicator */}
+                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                    <div className={`w-2 h-2 rounded-full transition-all duration-1000 ${
+                      isAlert ? 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,1)]' 
+                      : isActive ? 'bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)]' 
+                      : 'bg-zinc-600'
+                    }`} />
+                  </div>
+
+                  <div className="absolute inset-0 flex items-center justify-center -rotate-45 pointer-events-none pointer-events-none">
+                     <span className={`mono-data font-bold tracking-widest text-[8px] lg:text-[10px] transition-colors duration-500 ${
+                       isAlert ? 'text-red-400' : isActive ? 'text-cyan-400' : 'text-zinc-500'
+                     }`}>{room.name.toUpperCase()}</span>
+                  </div>
+                  
+                  {/* Spatial Ripples (Pulse/Ping) */}
+                  <AnimatePresence>
+                    {isActive && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                      >
+                         <motion.div
+                           initial={{ scale: 0, opacity: 0.8 }}
+                           animate={{ scale: 2.5, opacity: 0 }}
+                           transition={{ duration: 2, repeat: Infinity, ease: 'easeOut' }}
+                           className={`w-12 h-12 rounded-full border-2 ${isAlert ? 'border-red-500' : 'border-cyan-400'}`}
+                         />
+                         <motion.div
+                           initial={{ scale: 0, opacity: 0.6 }}
+                           animate={{ scale: 3.5, opacity: 0 }}
+                           transition={{ duration: 2.5, repeat: Infinity, ease: 'easeOut', delay: 0.5 }}
+                           className={`absolute w-12 h-12 rounded-full border border-dashed ${isAlert ? 'border-red-400' : 'border-cyan-300'}`}
+                         />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+               </div>
+             )
+          })}
+        </motion.div>
+      </div>
+      
+      {/* Real-time Low Resolution Camera Feed Overlay on Security Alert */}
+      <AnimatePresence>
+        {cameraFeedActive && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ type: 'spring', damping: 20 }}
+            className="absolute right-4 top-16 md:right-8 md:top-8 w-48 h-32 md:w-64 md:h-48 border border-red-500/30 rounded-lg overflow-hidden bg-black shadow-[0_10px_40px_rgba(239,68,68,0.3)] z-50 group font-mono"
+          >
+             {/* Noise or static video effect mask */}
+             <div className="absolute inset-0 opacity-[0.15] mix-blend-overlay z-10 pointer-events-none" 
+                  style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=%220 0 200 200%22 xmlns=%22http://www.w3.org/2000/svg%22%3E%3Cfilter id=%22noiseFilter%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.85%22 numOctaves=%223%22 stitchTiles=%22stitch%22/%3E%3C/filter%3E%3Crect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23noiseFilter)%22/%3E%3C/svg%3E")' }} />
+             
+             {/* Scanlines */}
+             <div className="absolute inset-0 bg-[linear-gradient(rgba(0,0,0,0)_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] pointer-events-none z-10" />
+
+             {/* Base low-res image */}
+             <div className="relative w-full h-full flex items-center justify-center grayscale contrast-150 brightness-90 sepia-[0.3] hue-rotate-[-30deg]">
+               <img src="https://images.unsplash.com/photo-1558002038-1055907df827?auto=format&fit=crop&q=10&w=300&h=200" alt="Camera Feed" className="w-full h-full object-cover blur-[2px] opacity-70" />
+             </div>
+             
+             {/* Overlay HUD */}
+             <div className="absolute top-2 left-2 flex items-center gap-1.5 z-20">
+               <motion.div 
+                 animate={{ opacity: [1, 0, 1] }} 
+                 transition={{ duration: 1, repeat: Infinity }}
+                 className="w-1.5 h-1.5 rounded-full bg-red-500" 
+               />
+               <span className="text-red-500 text-[8px] font-bold tracking-widest leading-none">REC</span>
+             </div>
+             <div className="absolute bottom-2 left-2 z-20">
+               <span className="text-white/60 text-[7px] uppercase tracking-wider">{alertLocation} SENSOR</span>
+             </div>
+             <div className="absolute top-2 right-2 z-20">
+               <span className="text-[7px] text-white/50">{new Date().toISOString().substring(11, 19)}Z</span>
+             </div>
+             <div className="absolute inset-0 pointer-events-none z-30 ring-1 ring-inset ring-red-500/20" />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="absolute top-4 left-4 flex flex-col gap-1 z-10 bg-[#080808]/80 backdrop-blur-sm p-3 rounded-lg border border-white/5">
+        <span className="mono-data text-[10px] text-[var(--accent-gold)]">Global Spatial Map</span>
+        <span className="mono-data text-[8px] text-zinc-400">View: Isometric Top-Down</span>
+      </div>
     </div>
-    <div className="absolute top-4 left-4 flex flex-col gap-1">
-      <span className="mono-data text-[10px] text-[var(--accent-gold)]">Scan Mode: Active</span>
-      <span className="mono-data text-[8px] text-zinc-500">Spatial Integrity: 98.4%</span>
-    </div>
-  </div>
-);
+  )
+}
+
 
 const TelemetryStrip = ({ history }: { history: any[] }) => {
   const [mouseX, setMouseX] = useState(0);
@@ -1764,7 +1906,12 @@ export default function App() {
 
         {/* Center: Digital Twin & Controls */}
         <div className="col-span-12 lg:col-span-6 flex flex-col gap-6">
-          <DigitalTwinMockup />
+          <DigitalTwinMockup 
+            alerts={data?.alerts || []} 
+            spatialPulseMessage={spatialPulseMessage} 
+            expandedDeviceId={expandedDeviceId}
+            setExpandedDeviceId={setExpandedDeviceId}
+          />
           
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
              {data.devices.map(dev => (
