@@ -1,0 +1,13 @@
+CREATE TABLE "FoodReference" ("id" TEXT NOT NULL PRIMARY KEY, "sourceId" TEXT NOT NULL, "name" TEXT NOT NULL, "category" TEXT NOT NULL, "pantryDaysMin" INTEGER, "pantryDaysMax" INTEGER, "refrigeratorDaysMin" INTEGER, "refrigeratorDaysMax" INTEGER, "freezerDaysMin" INTEGER, "freezerDaysMax" INTEGER, "afterOpeningDaysMax" INTEGER, "source" TEXT NOT NULL DEFAULT 'USDA FoodKeeper', "sourceUrl" TEXT NOT NULL);
+CREATE TABLE "InventoryItem" ("id" TEXT NOT NULL PRIMARY KEY, "referenceId" TEXT, "name" TEXT NOT NULL, "category" TEXT NOT NULL, "location" TEXT NOT NULL, "storageMethod" TEXT NOT NULL, "quantity" REAL NOT NULL DEFAULT 1, "unit" TEXT NOT NULL DEFAULT 'item', "acquiredAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "openedAt" DATETIME, "labelExpiresAt" DATETIME, "expectedShelfLifeDays" INTEGER, "consumedAt" DATETIME, "discardedAt" DATETIME, "notes" TEXT, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" DATETIME NOT NULL);
+CREATE TABLE "FoodObservation" ("id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "itemId" TEXT NOT NULL, "visualQuality" REAL, "odorConcern" BOOLEAN NOT NULL DEFAULT false, "userConfirmed" BOOLEAN NOT NULL DEFAULT false, "notes" TEXT, "timestamp" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE "FoodZoneReading" ("id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "nodeId" TEXT NOT NULL, "location" TEXT NOT NULL, "temperature" REAL, "humidity" REAL, "ethylenePpm" REAL, "vocIndex" REAL, "timestamp" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE "ShoppingItem" ("id" TEXT NOT NULL PRIMARY KEY, "name" TEXT NOT NULL, "quantity" REAL NOT NULL DEFAULT 1, "unit" TEXT NOT NULL DEFAULT 'item', "reason" TEXT, "status" TEXT NOT NULL DEFAULT 'NEEDED', "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "completedAt" DATETIME);
+CREATE UNIQUE INDEX "FoodReference_sourceId_key" ON "FoodReference"("sourceId");
+CREATE INDEX "FoodReference_name_idx" ON "FoodReference"("name");
+CREATE INDEX "FoodReference_category_idx" ON "FoodReference"("category");
+CREATE INDEX "InventoryItem_location_storageMethod_idx" ON "InventoryItem"("location", "storageMethod");
+CREATE INDEX "InventoryItem_labelExpiresAt_idx" ON "InventoryItem"("labelExpiresAt");
+CREATE INDEX "FoodObservation_itemId_timestamp_idx" ON "FoodObservation"("itemId", "timestamp");
+CREATE INDEX "FoodZoneReading_location_timestamp_idx" ON "FoodZoneReading"("location", "timestamp");
+CREATE INDEX "ShoppingItem_status_createdAt_idx" ON "ShoppingItem"("status", "createdAt");

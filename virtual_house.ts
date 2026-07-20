@@ -1,76 +1,55 @@
 import mqtt from 'mqtt';
+import { signEnvelope, type HardwareEnvelope } from './src/services/hardwareProtocol.ts';
 
-/**
- * UJO OS: VIRTUAL HOUSE SIMULATOR
- * This script pretends to be the physical hardware (ESP32s).
- * It generates grid surges, gas leaks, and motion events to test the Brain.
- */
+const SIM_SECRET = process.env.UJO_SIM_NODE_SECRET || 'ujo-development-simulator-secret-32chars';
+const sequences = new Map<string, number>();
+
+export function createSimulatedEnvelope(nodeId: string, payload: Record<string, unknown>, timestamp = Math.floor(Date.now() / 1000)): HardwareEnvelope {
+  const seq = (sequences.get(nodeId) ?? 0) + 1;
+  sequences.set(nodeId, seq);
+  const unsigned = { v: 1 as const, nodeId, seq, timestamp, type: 'telemetry' as const, payload };
+  return { ...unsigned, signature: signEnvelope(unsigned, SIM_SECRET) };
+}
+
 function startSimulation() {
-  const brokerUrl = process.env.MQTT_BROKER || 'mqtt://localhost:1883';
-  const client = mqtt.connect(brokerUrl, {
-    reconnectPeriod: 10000, // Very slow retry for simulation
-  });
-
+  const brokerUrl = process.env.MQTT_BROKER || 'mqtt://127.0.0.1:1883';
+  const client = mqtt.connect(brokerUrl, { reconnectPeriod: 10_000 });
   let hasLoggedError = false;
+  let fridgeEthylene = 10;
 
-  client.on('error', (err) => {
+  client.on('error', () => {
     if (!hasLoggedError) {
-      console.warn('🏘️  VIRTUAL HOUSE: Simulated Hardware link suspended (No local broker).');
+      console.warn('Virtual hardware suspended because the MQTT broker is unavailable.');
       hasLoggedError = true;
     }
   });
 
-  let gridVoltage = 220;
-  let fridgeEthylene = 10;
-  let motionCount = 0;
+  const publish = (nodeId: string, payload: Record<string, unknown>) => {
+    client.publish(`ujo/v1/nodes/${nodeId}/telemetry`, JSON.stringify(createSimulatedEnvelope(nodeId, payload)), { qos: 1 });
+  };
 
   client.on('connect', () => {
-    console.log('🏘️  VIRTUAL HOUSE: Online and publishing data...');
-
+    console.log('Virtual hardware test rig online.');
     setInterval(() => {
-      // 1. Simulate Grid Fluctuation
-      // Occasionally spike voltage to test protection
       const chance = Math.random();
-      if (chance > 0.95) {
-        gridVoltage = 271; // Surging
-      } else if (chance < 0.05) {
-        gridVoltage = 165; // Brownout
-      } else {
-        gridVoltage = 220 + (Math.random() * 10 - 5); // Normal noise
-      }
-
-      // 2. Simulate Ethylene accumulation (decay)
-      fridgeEthylene += 0.2; 
-      if (fridgeEthylene > 100) fridgeEthylene = 10; // Reset after peak
-
-      // 3. Publish Data
-      client.publish('ujo/power/grid', JSON.stringify({ 
-        voltage: Math.round(gridVoltage),
-        source: 'MAINS',
-        reactive_power: Math.round(Math.random() * 200),
-        power_factor: (0.85 + Math.random() * 0.15).toFixed(2),
-        current: (5 + Math.random() * 5).toFixed(1)
-      }));
-
-      client.publish('ujo/sensors/fridge', JSON.stringify({ 
-        gas: Math.round(fridgeEthylene) 
-      }));
-
-      if (Math.random() > 0.8) {
-        client.publish('ujo/sensors/livingroom', JSON.stringify({ 
-          motion: true 
-        }));
-      }
-
-      console.log(`[VIRTUAL HOUSE] Emitted Pulse -> Voltage: ${Math.round(gridVoltage)}V, Ethylene: ${Math.round(fridgeEthylene)}ppm`);
-
-    }, 5000); // 5-second heart beat
+      const voltage = chance > 0.95 ? 271 : chance < 0.05 ? 165 : 220 + (Math.random() * 10 - 5);
+      fridgeEthylene = fridgeEthylene > 100 ? 10 : fridgeEthylene + 0.2;
+      publish('ujo-grid-sim', {
+        kind: 'energy', room: 'Utility', voltage: Math.round(voltage), source: 'MAINS',
+        reactivePower: Math.round(Math.random() * 200), powerFactor: Number((0.85 + Math.random() * 0.15).toFixed(2)),
+        current: Number((5 + Math.random() * 5).toFixed(1)), frequency: 50
+      });
+      publish('ujo-kitchen-sim', {
+        kind: 'food-environment', room: 'Kitchen', ethylenePpm: Math.round(fridgeEthylene), temperatureC: 4.1, humidityPct: 72
+      });
+      publish('ujo-tank-sim', {
+        kind: 'water', room: 'Utility', tankLevelPct: 64, pumpRunning: false, flowLitresMinute: 0
+      });
+      if (Math.random() > 0.8) publish('ujo-presence-sim', { kind: 'presence', room: 'Living Room', motion: true, presence: true });
+    }, 5_000);
   });
 }
 
-// Check if running as main
-if (process.argv[1].includes('virtual_house')) {
-  startSimulation();
-}
+if (process.argv[1]?.includes('virtual_house')) startSimulation();
 
 export { startSimulation };

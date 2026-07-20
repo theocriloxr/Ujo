@@ -36,9 +36,6 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { io } from 'socket.io-client';
-import { GoogleGenAI, Type, Modality, FunctionDeclaration } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // --- TYPES ---
 interface Device {
@@ -949,21 +946,13 @@ export default function App() {
     try {
       // 1. High-Fidelity Cloud Voice (SaaS Tier Simulation)
       const persona = voiceSettings.persona || 'Ujo';
-      // Selecting the most natural voices available in the model
-      const voiceName = persona === 'Jarvis' ? 'Charon' : persona === 'Samantha' ? 'Puck' : 'Fenrir'; 
-      
-      const ttsResp = await ai.models.generateContent({
-         model: "gemini-3.1-flash-tts-preview",
-         contents: [{ parts: [{ text: text }] }],
-         config: {
-           responseModalities: [Modality.AUDIO],
-           speechConfig: {
-             voiceConfig: { prebuiltVoiceConfig: { voiceName } }
-           }
-         }
+      const ttsResp = await fetch('/api/voice/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, persona })
       });
-      
-      const base64Audio = ttsResp.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!ttsResp.ok) throw new Error(`Cloud speech unavailable (${ttsResp.status})`);
+      const { audio: base64Audio } = await ttsResp.json();
       if (base64Audio) {
          const binaryString = atob(base64Audio);
          const bytes = new Uint8Array(binaryString.length);
@@ -1407,15 +1396,6 @@ export default function App() {
 
   const syncHA = async () => {
     await fetch('/api/ha/sync', { method: 'POST' });
-    fetchStates();
-  };
-
-  const simulateStaffAccess = async () => {
-    await fetch('/api/access/staff-auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: 'staff_1' })
-    });
     fetchStates();
   };
 

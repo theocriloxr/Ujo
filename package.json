@@ -4,12 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "start": "npx prisma generate && npx prisma db push --accept-data-loss && node --experimental-strip-types server.ts",
+    "start": "node --experimental-strip-types scripts/bootstrap-db.ts && npx prisma migrate deploy && node --experimental-strip-types server.ts",
     "dev": "tsx server.ts",
     "build": "npx prisma generate && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "check": "npm run lint && npm test && npm run build"
   },
   "dependencies": {
     "@google/genai": "^1.51.0",

@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 
 /**
  * BABEL FISH: SPATIAL TRANSLATION SERVICE
@@ -41,5 +41,19 @@ export class TranslatorService {
       // Fail gracefully with the original text
       return text;
     }
+  }
+
+  public async synthesizeSpeech(text: string, persona = 'Ujo'): Promise<string | null> {
+    if (!this.genAI) return null;
+    const voiceName = persona === 'Jarvis' ? 'Charon' : persona === 'Samantha' ? 'Puck' : 'Fenrir';
+    const result = await this.genAI.models.generateContent({
+      model: 'gemini-3.1-flash-tts-preview',
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
+      }
+    });
+    return result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data ?? null;
   }
 }

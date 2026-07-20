@@ -1,22 +1,74 @@
-version: '3.8'
-
 services:
   ujo-core:
     build: .
     container_name: ujo-core
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - JWT_SECRET=${JWT_SECRET}
-      - HA_URL=${HA_URL}
-      - HA_TOKEN=${HA_TOKEN}
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: file:/app/data/ujo.db
+      JWT_SECRET: ${JWT_SECRET:?required}
+      UJO_OWNER_PIN: ${UJO_OWNER_PIN:?required}
+      UJO_DURESS_PIN: ${UJO_DURESS_PIN:?required}
+      UJO_STAFF_PIN: ${UJO_STAFF_PIN:?required}
+      UJO_BRIDGE_TOKEN: ${UJO_BRIDGE_TOKEN:?required}
+      APP_ORIGINS: ${APP_ORIGINS:?required}
+      MQTT_BROKER: mqtts://mosquitto:8883
+      MQTT_USERNAME: ${MQTT_USERNAME:?required}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?required}
+      MQTT_CA_PATH: /run/secrets/mqtt-ca.crt
+      UJO_NODE_KEYS_JSON: ${UJO_NODE_KEYS_JSON:-{}}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+      HA_URL: ${HA_URL:-http://host.docker.internal:8123}
+      HA_TOKEN: ${HA_TOKEN:-}
     volumes:
       - ujo_data:/app/data
-    network_mode: "host" # Better for local IoT discovery (mDNS/Zeroconf)
+      - ./deployment/mosquitto/certs/ca.crt:/run/secrets/mqtt-ca.crt:ro
+    depends_on:
+      - mosquitto
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
 
-  # Optional edge proxy (Nginx) and time-series DB (InfluxDB) could go here
-  
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    container_name: ujo-mqtt
+    restart: unless-stopped
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:?required}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?required}
+    command: >-
+      /bin/sh -c 'mosquitto_passwd -b -c /mosquitto/data/passwords "$${MQTT_USERNAME}" "$${MQTT_PASSWORD}" && exec mosquitto -c /mosquitto/config/mosquitto.conf'
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./deployment/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./deployment/mosquitto/certs:/mosquitto/certs:ro
+      - mosquitto_data:/mosquitto/data
+    security_opt:
+      - no-new-privileges:true
+
+  ollama:
+    image: ollama/ollama:0.32.1
+    container_name: ujo-ollama
+    profiles: ["ai"]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 volumes:
   ujo_data:
+  mosquitto_data:
+  ollama_data:

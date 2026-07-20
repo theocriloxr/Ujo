@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
@@ -12,15 +13,27 @@ import http from 'http';
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import QRCode from 'qrcode';
+import { AttemptLimiter, assertProductionSecrets, hashPin, safeEqualText, verifyPin } from './src/services/security.ts';
+import { isBridgeAction, isLoopbackAddress } from './src/services/bridgePolicy.ts';
+import { OllamaService } from './src/services/OllamaService.ts';
+import { evaluateProposedAction } from './src/services/commandPolicy.ts';
+import { estimateFreshness } from './src/services/FoodIntelligence.ts';
 
 // --- CONFIGURATION ---
-const PORT = 3000;
+const PORT = Number.parseInt(process.env.PORT || '3000', 10);
+assertProductionSecrets(process.env);
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_123';
+const OWNER_PIN = process.env.UJO_OWNER_PIN || '1234';
+const DURESS_PIN = process.env.UJO_DURESS_PIN || '9999';
+const STAFF_PIN = process.env.UJO_STAFF_PIN || '2468';
+const pinLimiter = new AttemptLimiter(5, 60_000);
+const allowedOrigins = (process.env.APP_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean);
 
 // --- ENTERPRISE HUB SERVICES ---
 const prisma = new PrismaClient();
 const proactiveEngine = new ProactiveEngine(prisma);
 const translator = new TranslatorService();
+const ollama = new OllamaService();
 
 const haBridge = new HABridge({
   url: process.env.HA_URL || 'http://localhost:8123',
@@ -64,7 +77,7 @@ async function seedData() {
         id: 'staff_1',
         name: 'Abike (Cleaner)',
         role: 'STAFF',
-        pinHash: 'dummy_hash', // In production this would be a bcrypt hash
+        pinHash: hashPin(STAFF_PIN),
         scheduleRaw: JSON.stringify({
           days: 'Tuesday, Thursday',
           start_time: '10:00',
@@ -73,6 +86,22 @@ async function seedData() {
       }
     });
   }
+
+  await prisma.accessProfile.updateMany({
+    where: { role: 'STAFF', pinHash: { not: { startsWith: 'scrypt$' } } },
+    data: { pinHash: hashPin(STAFF_PIN) }
+  });
+
+  await prisma.accessProfile.upsert({
+    where: { id: 'owner_primary' },
+    update: { pinHash: hashPin(OWNER_PIN), role: 'OWNER' },
+    create: { id: 'owner_primary', name: 'Primary Admin', role: 'OWNER', pinHash: hashPin(OWNER_PIN) }
+  });
+  await prisma.accessProfile.upsert({
+    where: { id: 'duress_primary' },
+    update: { pinHash: hashPin(DURESS_PIN), role: 'DURESS' },
+    create: { id: 'duress_primary', name: 'Duress Profile', role: 'DURESS', pinHash: hashPin(DURESS_PIN) }
+  });
 }
 
 // --- STATE MANAGER (Enterprise Version) ---
@@ -81,7 +110,16 @@ class StateManager {
     const devices = await prisma.device.findMany();
     const config = await prisma.systemConfig.findUnique({ where: { id: 'GLOBAL' } });
     const alerts = await prisma.alert.findMany({ where: { acknowledged: false } });
-    const profiles = await prisma.accessProfile.findMany();
+    const profiles = await prisma.accessProfile.findMany({
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        scheduleRaw: true,
+        isTemporal: true,
+        expiresAt: true
+      }
+    });
     
     // In a real InfluxDB environment, this would be a time-series query
     const energy = {
@@ -97,7 +135,7 @@ class StateManager {
     return { 
       devices, 
       mode: config?.mode, 
-      location: 'Home', // Mocked
+      location: config?.location || 'Home',
       updateAvailable: false, // Mocked
       subscriptionActive: true, // Mocked
       powerSource: config?.powerSource,
@@ -256,17 +294,19 @@ class StateManager {
 
   // --- DURESS PROTOCOL ---
   async unlockWithPin(pin: string) {
-    const NORMAL_PIN = '1234';
-    const DURESS_PIN = '9999';
+    const profiles = await prisma.accessProfile.findMany({
+      where: { role: { in: ['OWNER', 'DURESS'] } }
+    });
+    const profile = profiles.find(candidate => verifyPin(pin, candidate.pinHash));
 
-    if (pin === NORMAL_PIN) {
+    if (profile?.role === 'OWNER') {
       await this.updateDevice('lock_1', 'unlocked');
       await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { mode: 'STANDARD' } });
       await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'SUCCESS', { type: 'NORMAL' });
       return { success: true, message: 'Welcome. Door unlocked.' };
     } 
     
-    if (pin === DURESS_PIN) {
+    if (profile?.role === 'DURESS') {
       await this.updateDevice('lock_1', 'unlocked');
       await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { mode: 'DURESS_ACTIVE' } });
       await this.triggerAnomaly(
@@ -281,6 +321,11 @@ class StateManager {
 
     await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'FAILURE', { pin_entered: '****' });
     return { success: false, message: 'Invalid PIN' };
+  }
+
+  async verifyOwnerPin(pin: string) {
+    const owners = await prisma.accessProfile.findMany({ where: { role: 'OWNER' } });
+    return owners.some(owner => verifyPin(pin, owner.pinHash));
   }
 
   async triggerAnomaly(title: string, message: string, severity: string, type: string = 'anomaly') {
@@ -312,9 +357,13 @@ class StateManager {
     return { success: true, message: `Alert acknowledged.` };
   }
 
-  async checkStaffAccess(staffId: string) {
+  async checkStaffAccess(staffId: string, pin: string) {
     const profile = await prisma.accessProfile.findUnique({ where: { id: staffId } });
     if (!profile) return { allowed: false, reason: 'No profile found' };
+    if (profile.role !== 'STAFF' || !verifyPin(pin, profile.pinHash)) {
+      await this.logSecurityEvent('STAFF_AUTH', staffId, 'FAILURE');
+      return { allowed: false, reason: 'Invalid staff credentials' };
+    }
 
     const schedule = JSON.parse(profile.scheduleRaw || '{}');
     const { days = '', start_time = '00:00', end_time = '23:59' } = schedule;
@@ -328,6 +377,7 @@ class StateManager {
 
     if (isDayMatch && isTimeMatch) {
       await this.updateDevice('lock_1', 'unlocked');
+      await this.logSecurityEvent('STAFF_AUTH', staffId, 'SUCCESS');
       return { allowed: true, name: profile.name };
     }
 
@@ -338,7 +388,10 @@ class StateManager {
   }
 
   async setLocation(location: string) {
-    // Mocked for enterprise version
+    await prisma.systemConfig.update({
+      where: { id: 'GLOBAL' },
+      data: { location }
+    });
     await this.broadcastUpdate();
   }
 
@@ -432,10 +485,10 @@ async function startServer() {
   
   const app = express();
   const server = http.createServer(app);
-  io = new Server(server, { cors: { origin: '*' } });
+  io = new Server(server, { cors: { origin: allowedOrigins.length ? allowedOrigins : process.env.NODE_ENV !== 'production' } });
 
   // Initialize MQTT Bridge & Virtual House Simulation
-  setupMQTT(io, prisma);
+  const hardwareBus = setupMQTT(io, prisma);
   if (process.env.NODE_ENV !== 'production') {
     console.log('🛠️  DEV MODE: Auto-starting Virtual House Simulator...');
     startSimulation();
@@ -448,10 +501,77 @@ async function startServer() {
     socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
   });
 
-  app.use(cors());
+  app.use(cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin) || (allowedOrigins.length === 0 && process.env.NODE_ENV !== 'production')) {
+        return callback(null, true);
+      }
+      callback(new Error('Origin is not allowed.'));
+    }
+  }));
   app.use(express.json());
 
   // --- API ENDPOINTS ---
+
+  app.get('/api/health', async (_req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ status: 'ok', database: 'ok', mqtt: hardwareBus.connected() ? 'connected' : 'disconnected' });
+    } catch {
+      res.status(503).json({ status: 'degraded', database: 'error' });
+    }
+  });
+
+  // MARK-XXXIX/Jarvis compatibility bridge. This intentionally exposes only
+  // smart-home operations; arbitrary shell, filesystem and Docker execution
+  // are never accepted by the home-control process.
+  app.post('/api/v1/execute', async (req, res) => {
+    const configuredToken = process.env.UJO_BRIDGE_TOKEN;
+    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '') ?? '';
+    const authorized = configuredToken
+      ? safeEqualText(bearer, configuredToken)
+      : process.env.NODE_ENV !== 'production' && isLoopbackAddress(req.socket.remoteAddress);
+    if (!authorized) return res.status(401).json({ status: 'error', error: 'Bridge authentication required.' });
+
+    const { action, parameters = {} } = req.body ?? {};
+    if (!isBridgeAction(action)) {
+      return res.status(400).json({ status: 'error', error: 'Unsupported or unsafe bridge action.' });
+    }
+
+    try {
+      if (action === 'status' || action === 'get_state') {
+        const state = await stateManager.getStates();
+        return res.json({ status: 'success', output: action === 'status' ? 'Ujo hub online' : state, state });
+      }
+      if (action === 'list_nodes') {
+        return res.json({ status: 'success', output: 'local', nodes: ['local'] });
+      }
+      if (action === 'power_state') {
+        const source = parameters.source;
+        if (!['MAINS', 'INVERTER', 'GENERATOR', 'SOLAR'].includes(source)) {
+          return res.status(400).json({ status: 'error', error: 'Invalid power source.' });
+        }
+        await stateManager.setPowerState(source);
+        return res.json({ status: 'success', output: `Power source set to ${source}` });
+      }
+      if (action === 'device_control') {
+        const { id, state } = parameters;
+        if (typeof id !== 'string' || typeof state !== 'string' || state.length > 64) {
+          return res.status(400).json({ status: 'error', error: 'Valid device id and state are required.' });
+        }
+        const device = await prisma.device.findUnique({ where: { id } });
+        if (!device) return res.status(404).json({ status: 'error', error: 'Device not found.' });
+        if (device.type === 'lock') {
+          return res.status(403).json({ status: 'error', error: 'Locks require the dedicated authenticated security flow.' });
+        }
+        await stateManager.updateDevice(id, state);
+        return res.json({ status: 'success', output: `${device.name} set to ${state}` });
+      }
+    } catch (error) {
+      console.error('Bridge execution failed:', error);
+      return res.status(500).json({ status: 'error', error: 'Bridge execution failed.' });
+    }
+  });
 
   // Fetch all states
   app.get('/api/states', async (req, res) => {
@@ -505,6 +625,279 @@ async function startServer() {
     res.json({ translated });
   });
 
+  app.get('/api/assistant/health', async (_req, res) => {
+    res.json(await ollama.health());
+  });
+
+  app.post('/api/assistant/plan', async (req, res) => {
+    const { text } = req.body ?? {};
+    if (typeof text !== 'string') return res.status(400).json({ error: 'Text is required.' });
+    try {
+      const state = await stateManager.getStates();
+      const plan = await ollama.plan(text, {
+        mode: state.mode,
+        location: state.location,
+        powerSource: state.powerSource,
+        devices: state.devices.map(({ id, name, type, state: deviceState, status }) => ({ id, name, type, state: deviceState, status }))
+      });
+      res.json({
+        ...plan,
+        actions: plan.actions.map(action => ({ ...action, policy: evaluateProposedAction(action) }))
+      });
+    } catch (error) {
+      console.error('Offline assistant planning failed:', error);
+      res.status(503).json({ error: 'Offline assistant is unavailable. Deterministic controls remain operational.' });
+    }
+  });
+
+  app.get('/api/hardware/nodes', async (_req, res) => {
+    const nodes = await prisma.hardwareNode.findMany({ orderBy: { id: 'asc' } });
+    res.json(nodes.map(node => ({
+      ...node,
+      allowedActions: JSON.parse(node.allowedActions || '[]')
+    })));
+  });
+
+  app.post('/api/hardware/nodes/:id/provision', async (req, res) => {
+    const { id } = req.params;
+    const { pin, kind, room, safetyClass = 'STANDARD', allowedActions = [] } = req.body ?? {};
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) {
+      await stateManager.logSecurityEvent('HARDWARE_PROVISION', id, 'FAILURE');
+      return res.status(403).json({ error: 'Owner authentication required.' });
+    }
+    if (!hardwareBus.hasKey(id)) return res.status(400).json({ error: 'Install a node key on the hub before provisioning.' });
+    if (typeof kind !== 'string' || typeof room !== 'string' || !['STANDARD', 'CRITICAL', 'ACCESS'].includes(safetyClass)) {
+      return res.status(400).json({ error: 'Valid kind, room, and safety class are required.' });
+    }
+    const supportedActions = ['set_relay'];
+    if (!Array.isArray(allowedActions) || allowedActions.some(action => !supportedActions.includes(action))) {
+      return res.status(400).json({ error: 'One or more hardware actions are unsupported.' });
+    }
+    const node = await prisma.hardwareNode.upsert({
+      where: { id },
+      update: { kind, room, safetyClass, allowedActions: JSON.stringify(allowedActions), provisioned: true },
+      create: { id, kind, room, safetyClass, allowedActions: JSON.stringify(allowedActions), provisioned: true }
+    });
+    await stateManager.logSecurityEvent('HARDWARE_PROVISION', 'Owner', 'SUCCESS', { nodeId: id, safetyClass });
+    res.json({ ...node, allowedActions });
+  });
+
+  app.get('/api/hardware/commands', async (_req, res) => {
+    await prisma.hardwareCommand.updateMany({
+      where: { status: 'PENDING', expiresAt: { lte: new Date() } },
+      data: { status: 'EXPIRED' }
+    });
+    res.json(await prisma.hardwareCommand.findMany({ orderBy: { createdAt: 'desc' }, take: 100 }));
+  });
+
+  app.post('/api/hardware/commands', async (req, res) => {
+    const { nodeId, action, value, reason } = req.body ?? {};
+    if (typeof nodeId !== 'string' || typeof action !== 'string' || typeof reason !== 'string' || reason.trim().length < 3) {
+      return res.status(400).json({ error: 'Node, action, and reason are required.' });
+    }
+    const node = await prisma.hardwareNode.findUnique({ where: { id: nodeId } });
+    if (!node?.provisioned) return res.status(409).json({ error: 'Node must be owner-provisioned first.' });
+    if (node.safetyClass === 'ACCESS') return res.status(403).json({ error: 'Access-control nodes require the dedicated security controller.' });
+    const allowedActions = JSON.parse(node.allowedActions || '[]') as string[];
+    if (!allowedActions.includes(action)) return res.status(403).json({ error: 'Action is not allowed for this node.' });
+    const command = await prisma.hardwareCommand.create({
+      data: {
+        nodeId,
+        action,
+        value: value === undefined ? null : String(value),
+        requestedBy: 'dashboard',
+        reason: reason.trim().slice(0, 500),
+        expiresAt: new Date(Date.now() + 5 * 60_000)
+      }
+    });
+    res.status(202).json(command);
+  });
+
+  app.post('/api/hardware/commands/:id/approve', async (req, res) => {
+    const { id } = req.params;
+    const { pin } = req.body ?? {};
+    const attemptKey = `hardware-approval:${req.ip}`;
+    const attempt = pinLimiter.consume(attemptKey);
+    if (!attempt.allowed) {
+      res.setHeader('Retry-After', attempt.retryAfterSeconds);
+      return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+    }
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) {
+      await stateManager.logSecurityEvent('HARDWARE_COMMAND_APPROVAL', 'Unknown', 'FAILURE', { commandId: id });
+      return res.status(403).json({ error: 'Owner authentication required.' });
+    }
+    pinLimiter.reset(attemptKey);
+    const command = await prisma.hardwareCommand.findUnique({ where: { id } });
+    if (!command || command.status !== 'PENDING') return res.status(409).json({ error: 'Command is not pending.' });
+    if (command.expiresAt <= new Date()) {
+      await prisma.hardwareCommand.update({ where: { id }, data: { status: 'EXPIRED' } });
+      return res.status(410).json({ error: 'Command expired.' });
+    }
+    const reserved = await prisma.hardwareCommand.updateMany({
+      where: { id, status: 'PENDING' },
+      data: { status: 'APPROVING', approvedAt: new Date() }
+    });
+    if (reserved.count !== 1) return res.status(409).json({ error: 'Command was already handled.' });
+    try {
+      if (!hardwareBus.connected()) throw new Error('Hardware bus is offline.');
+      await hardwareBus.sendCommand(id, command.nodeId, command.action, command.value ?? undefined);
+      const sent = await prisma.hardwareCommand.update({ where: { id }, data: { status: 'SENT' } });
+      await stateManager.logSecurityEvent('HARDWARE_COMMAND_APPROVAL', 'Owner', 'SUCCESS', { commandId: id, nodeId: command.nodeId });
+      res.json(sent);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Command delivery failed.';
+      await prisma.hardwareCommand.update({ where: { id }, data: { status: 'PENDING', approvedAt: null, error: message } });
+      res.status(503).json({ error: message });
+    }
+  });
+
+  app.get('/api/food/references', async (req, res) => {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    res.json(await prisma.foodReference.findMany({
+      where: query ? { name: { contains: query } } : undefined,
+      orderBy: { name: 'asc' },
+      take: 100
+    }));
+  });
+
+  app.get('/api/food/items', async (_req, res) => {
+    const items = await prisma.inventoryItem.findMany({
+      where: { consumedAt: null, discardedAt: null },
+      orderBy: { updatedAt: 'desc' }
+    });
+    const enriched = await Promise.all(items.map(async item => {
+      const [reference, observation, zoneReadings] = await Promise.all([
+        item.referenceId ? prisma.foodReference.findUnique({ where: { id: item.referenceId } }) : null,
+        prisma.foodObservation.findFirst({ where: { itemId: item.id }, orderBy: { timestamp: 'desc' } }),
+        prisma.foodZoneReading.findMany({ where: { location: item.location }, orderBy: { timestamp: 'desc' }, take: 2 })
+      ]);
+      const shelfDays = item.expectedShelfLifeDays ?? (
+        item.storageMethod === 'FREEZER' ? reference?.freezerDaysMax :
+        item.storageMethod === 'REFRIGERATOR' ? reference?.refrigeratorDaysMax : reference?.pantryDaysMax
+      );
+      const latest = zoneReadings[0];
+      const previous = zoneReadings[1];
+      const ethyleneIncreasePct = latest?.ethylenePpm && previous?.ethylenePpm
+        ? ((latest.ethylenePpm - previous.ethylenePpm) / Math.max(previous.ethylenePpm, 0.01)) * 100
+        : undefined;
+      const temperatureExcursionHours = latest?.temperature !== null && latest?.temperature !== undefined && (
+        (item.storageMethod === 'REFRIGERATOR' && latest.temperature > 5) ||
+        (item.storageMethod === 'FREEZER' && latest.temperature > -15)
+      ) ? 1 : 0;
+      return {
+        ...item,
+        freshness: estimateFreshness({
+          acquiredAt: item.acquiredAt,
+          openedAt: item.openedAt,
+          labelExpiresAt: item.labelExpiresAt,
+          expectedShelfLifeDays: shelfDays,
+          afterOpeningDays: reference?.afterOpeningDaysMax,
+          temperatureExcursionHours,
+          ethyleneIncreasePct,
+          vocAnomaly: (latest?.vocIndex ?? 0) > 250,
+          visualQuality: observation?.visualQuality,
+          odorConcern: observation?.odorConcern
+        }),
+        latestObservation: observation,
+        latestZoneReading: latest
+      };
+    }));
+    res.json(enriched);
+  });
+
+  app.post('/api/food/items', async (req, res) => {
+    const { name, category = 'Other', location, storageMethod, quantity = 1, unit = 'item', referenceId, labelExpiresAt, expectedShelfLifeDays, notes } = req.body ?? {};
+    if (typeof name !== 'string' || !name.trim() || typeof location !== 'string' || !['PANTRY', 'REFRIGERATOR', 'FREEZER', 'COUNTER'].includes(storageMethod)) {
+      return res.status(400).json({ error: 'Name, location, and valid storage method are required.' });
+    }
+    if (!Number.isFinite(Number(quantity)) || Number(quantity) <= 0 || (expectedShelfLifeDays !== undefined && (!Number.isInteger(Number(expectedShelfLifeDays)) || Number(expectedShelfLifeDays) < 1))) {
+      return res.status(400).json({ error: 'Quantity and shelf life must be positive numbers.' });
+    }
+    if (referenceId && !(await prisma.foodReference.findUnique({ where: { id: referenceId } }))) {
+      return res.status(400).json({ error: 'Food reference does not exist.' });
+    }
+    const parsedLabelDate = labelExpiresAt ? new Date(labelExpiresAt) : null;
+    if (parsedLabelDate && Number.isNaN(parsedLabelDate.getTime())) return res.status(400).json({ error: 'Label expiry date is invalid.' });
+    const item = await prisma.inventoryItem.create({ data: {
+      name: name.trim().slice(0, 200), category: String(category).slice(0, 100), location: location.trim().slice(0, 100), storageMethod,
+      quantity: Number(quantity), unit: String(unit).slice(0, 30), referenceId: referenceId || null,
+      labelExpiresAt: parsedLabelDate,
+      expectedShelfLifeDays: expectedShelfLifeDays ? Number(expectedShelfLifeDays) : null,
+      notes: notes ? String(notes).slice(0, 1000) : null
+    } });
+    res.status(201).json(item);
+  });
+
+  app.patch('/api/food/items/:id', async (req, res) => {
+    const { id } = req.params;
+    const { action, quantity, location, openedAt } = req.body ?? {};
+    const existing = await prisma.inventoryItem.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Inventory item not found.' });
+    if (!['OPEN', 'CONSUME', 'DISCARD', 'UPDATE'].includes(action)) return res.status(400).json({ error: 'Invalid inventory action.' });
+    const parsedOpenedAt = action === 'OPEN' ? new Date(openedAt || Date.now()) : null;
+    if (parsedOpenedAt && Number.isNaN(parsedOpenedAt.getTime())) return res.status(400).json({ error: 'Opened date is invalid.' });
+    const item = await prisma.inventoryItem.update({ where: { id }, data: {
+      openedAt: parsedOpenedAt ?? undefined,
+      consumedAt: action === 'CONSUME' ? new Date() : undefined,
+      discardedAt: action === 'DISCARD' ? new Date() : undefined,
+      quantity: action === 'UPDATE' && Number(quantity) > 0 ? Number(quantity) : undefined,
+      location: action === 'UPDATE' && typeof location === 'string' ? location.slice(0, 100) : undefined
+    } });
+    res.json(item);
+  });
+
+  app.post('/api/food/items/:id/observations', async (req, res) => {
+    const { id } = req.params;
+    if (!(await prisma.inventoryItem.findUnique({ where: { id } }))) return res.status(404).json({ error: 'Inventory item not found.' });
+    const { visualQuality, odorConcern = false, notes, userConfirmed = true } = req.body ?? {};
+    if (visualQuality !== undefined && (!Number.isFinite(Number(visualQuality)) || Number(visualQuality) < 0 || Number(visualQuality) > 100)) {
+      return res.status(400).json({ error: 'Visual quality must be from 0 to 100.' });
+    }
+    res.status(201).json(await prisma.foodObservation.create({ data: {
+      itemId: id, visualQuality: visualQuality === undefined ? null : Number(visualQuality), odorConcern: Boolean(odorConcern),
+      userConfirmed: Boolean(userConfirmed), notes: notes ? String(notes).slice(0, 1000) : null
+    } }));
+  });
+
+  app.get('/api/shopping', async (_req, res) => {
+    res.json(await prisma.shoppingItem.findMany({ where: { status: 'NEEDED' }, orderBy: { createdAt: 'desc' } }));
+  });
+
+  app.post('/api/shopping', async (req, res) => {
+    const { name, quantity = 1, unit = 'item', reason } = req.body ?? {};
+    if (typeof name !== 'string' || !name.trim() || !Number.isFinite(Number(quantity)) || Number(quantity) <= 0) return res.status(400).json({ error: 'Valid item and quantity are required.' });
+    res.status(201).json(await prisma.shoppingItem.create({ data: {
+      name: name.trim().slice(0, 200), quantity: Number(quantity), unit: String(unit).slice(0, 30), reason: reason ? String(reason).slice(0, 500) : null
+    } }));
+  });
+
+  app.patch('/api/shopping/:id', async (req, res) => {
+    const { status } = req.body ?? {};
+    if (!['NEEDED', 'PURCHASED', 'DISMISSED'].includes(status)) return res.status(400).json({ error: 'Invalid shopping status.' });
+    try {
+      res.json(await prisma.shoppingItem.update({ where: { id: req.params.id }, data: {
+        status, completedAt: status === 'NEEDED' ? null : new Date()
+      } }));
+    } catch {
+      res.status(404).json({ error: 'Shopping item not found.' });
+    }
+  });
+
+  app.post('/api/voice/synthesize', async (req, res) => {
+    const { text, persona = 'Ujo' } = req.body ?? {};
+    if (typeof text !== 'string' || text.trim().length === 0 || text.length > 1_000) {
+      return res.status(400).json({ error: 'Text must be between 1 and 1000 characters.' });
+    }
+    try {
+      const audio = await translator.synthesizeSpeech(text.trim(), persona);
+      if (!audio) return res.status(503).json({ error: 'Cloud speech is not configured.' });
+      res.json({ audio, sampleRate: 24000, encoding: 'pcm_s16le' });
+    } catch (error) {
+      console.error('Speech synthesis error:', error);
+      res.status(502).json({ error: 'Speech synthesis failed.' });
+    }
+  });
+
   app.post('/api/devices/:id/toggle-sheddable', async (req, res) => {
     const { id } = req.params;
     const device = await prisma.device.findUnique({ where: { id } });
@@ -551,6 +944,8 @@ async function startServer() {
 
   // Motion Detection Trigger (Fly vs Human Logic)
   app.post('/api/motion', async (req, res) => {
+    const { room = 'Living Room' } = req.body ?? {};
+    await stateManager.simulateMotion(room);
     const data = await stateManager.getStates();
     if (data.location === 'Away') {
       const id = await stateManager.triggerAnomaly(
@@ -570,9 +965,19 @@ async function startServer() {
 
   // Simulate Staff Access Attempt
   app.post('/api/access/staff-auth', async (req, res) => {
-    const { id } = req.body;
-    const result = await stateManager.checkStaffAccess(id);
+    const { id, pin } = req.body ?? {};
+    if (typeof id !== 'string' || typeof pin !== 'string') {
+      return res.status(400).json({ success: false, message: 'Profile ID and PIN are required.' });
+    }
+    const attemptKey = `staff:${req.ip}:${id}`;
+    const attempt = pinLimiter.consume(attemptKey);
+    if (!attempt.allowed) {
+      res.setHeader('Retry-After', attempt.retryAfterSeconds);
+      return res.status(429).json({ success: false, message: 'Too many attempts. Try again later.' });
+    }
+    const result = await stateManager.checkStaffAccess(id, pin);
     if (result.allowed) {
+      pinLimiter.reset(attemptKey);
       res.json({ success: true, message: `Access granted for ${result.name}. Door unlocked.` });
     } else {
       const alertId = await stateManager.triggerAnomaly(
@@ -620,12 +1025,6 @@ async function startServer() {
       });
     }
     res.json({ success: true, synced: haDevices.length });
-  });
-
-  // Voice Settings Update
-  app.post('/api/voice/settings', async (req, res) => {
-    // Legacy support- in Prisma we'd have a VoiceSettings model
-    res.json({ success: true });
   });
 
   // OVER-THE-AIR (OTA) UPDATE MANAGER
@@ -697,12 +1096,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  app.post('/api/motion', async (req, res) => {
-    const { room = 'Living Room' } = req.body;
-    await stateManager.simulateMotion(room);
-    res.json({ success: true, message: `Motion event broadcasted for ${room}` });
-  });
-
   // Voice Settings Endpoints
   app.get('/api/voice/settings', async (req, res) => {
     const settings = await prisma.voiceSettings.upsert({
@@ -763,10 +1156,18 @@ async function startServer() {
 
   app.post('/api/system/vault/auth', async (req, res) => {
      const { pin } = req.body;
-     if (pin === '1234') { // Admin PIN
+     const attemptKey = `vault:${req.ip}`;
+     const attempt = pinLimiter.consume(attemptKey);
+     if (!attempt.allowed) {
+        res.setHeader('Retry-After', attempt.retryAfterSeconds);
+        return res.status(429).json({ success: false, message: 'Too many attempts. Try again later.' });
+     }
+     if (typeof pin === 'string' && await stateManager.verifyOwnerPin(pin)) {
+        pinLimiter.reset(attemptKey);
         await stateManager.triggerAnomaly('Vault Override Used', 'Manual PIN used for secure action authorization.', 'medium', 'security');
         res.json({ success: true });
      } else {
+        await stateManager.logSecurityEvent('VAULT_PIN_ATTEMPT', 'Vault Keypad', 'FAILURE');
         res.status(403).json({ success: false, message: 'Invalid Admin PIN' });
      }
   });
@@ -780,10 +1181,6 @@ async function startServer() {
     const { id } = req.body;
     const result = await stateManager.lazarusReboot(id);
     res.json(result);
-  });
-
-  app.get('/api/test-env', (req, res) => {
-    res.json({ val: process.env.GEMINI_API_KEY });
   });
 
   app.post('/api/system/simulate-coadmin', async (req, res) => {
@@ -809,8 +1206,16 @@ async function startServer() {
   // SECURITY UNLOCK (Duress Logic)
   app.post('/api/security/unlock', async (req, res) => {
     const { pin } = req.body;
+    const attemptKey = `unlock:${req.ip}`;
+    const attempt = pinLimiter.consume(attemptKey);
+    if (!attempt.allowed) {
+      res.setHeader('Retry-After', attempt.retryAfterSeconds);
+      return res.status(429).json({ success: false, message: 'Too many attempts. Try again later.' });
+    }
+    if (typeof pin !== 'string') return res.status(400).json({ success: false, message: 'PIN is required.' });
     const result = await stateManager.unlockWithPin(pin);
-    res.json(result);
+    if (result.success) pinLimiter.reset(attemptKey);
+    res.status(result.success ? 200 : 401).json(result);
   });
 
   // PREDICTIVE ENGINE SIMULATOR

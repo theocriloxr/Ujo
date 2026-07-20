@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./ujo_os_v2.db"
+  url      = env("DATABASE_URL")
 }
 
 // Enterprise-Grade Smart Home Hub Schema
@@ -27,6 +27,7 @@ model Device {
 model SystemConfig {
   id           String @id @default("GLOBAL")
   mode         String @default("STANDARD") // STANDARD, AWAY, DURESS_ACTIVE
+  location     String @default("Home")
   powerSource  String @default("MAINS")    // MAINS, INVERTER
   autoShedding Boolean @default(true)
   version      String @default("3.1.0-alpha")
@@ -94,4 +95,128 @@ model AuditLog {
   actor     String
   timestamp DateTime @default(now())
   meta      String?  // Extra JSON data
+}
+
+model HardwareNode {
+  id              String   @id
+  kind            String
+  room            String?
+  firmwareVersion String?
+  status          String   @default("OFFLINE")
+  provisioned     Boolean  @default(false)
+  safetyClass     String   @default("STANDARD")
+  allowedActions  String   @default("[]")
+  lastSequence    Int      @default(-1)
+  commandSequence Int      @default(0)
+  lastSeenAt      DateTime?
+  createdAt       DateTime @default(now())
+}
+
+model HardwareCommand {
+  id          String   @id @default(uuid())
+  nodeId      String
+  action      String
+  value       String?
+  status      String   @default("PENDING")
+  requestedBy String
+  reason      String
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+  approvedAt  DateTime?
+  completedAt DateTime?
+  error       String?
+
+  @@index([status, expiresAt])
+  @@index([nodeId, createdAt])
+}
+
+model SensorTelemetry {
+  id        Int      @id @default(autoincrement())
+  nodeId    String
+  kind      String
+  payload   String
+  timestamp DateTime @default(now())
+
+  @@index([nodeId, timestamp])
+  @@index([kind, timestamp])
+}
+
+model FoodReference {
+  id                   String @id @default(uuid())
+  sourceId             String @unique
+  name                 String
+  category             String
+  pantryDaysMin        Int?
+  pantryDaysMax        Int?
+  refrigeratorDaysMin  Int?
+  refrigeratorDaysMax  Int?
+  freezerDaysMin       Int?
+  freezerDaysMax       Int?
+  afterOpeningDaysMax  Int?
+  source               String @default("USDA FoodKeeper")
+  sourceUrl            String
+
+  @@index([name])
+  @@index([category])
+}
+
+model InventoryItem {
+  id                    String   @id @default(uuid())
+  referenceId           String?
+  name                  String
+  category              String
+  location              String
+  storageMethod         String
+  quantity              Float    @default(1)
+  unit                  String   @default("item")
+  acquiredAt            DateTime @default(now())
+  openedAt              DateTime?
+  labelExpiresAt        DateTime?
+  expectedShelfLifeDays Int?
+  consumedAt            DateTime?
+  discardedAt           DateTime?
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([location, storageMethod])
+  @@index([labelExpiresAt])
+}
+
+model FoodObservation {
+  id            Int      @id @default(autoincrement())
+  itemId        String
+  visualQuality Float?
+  odorConcern   Boolean  @default(false)
+  userConfirmed Boolean  @default(false)
+  notes         String?
+  timestamp     DateTime @default(now())
+
+  @@index([itemId, timestamp])
+}
+
+model FoodZoneReading {
+  id          Int      @id @default(autoincrement())
+  nodeId      String
+  location    String
+  temperature Float?
+  humidity    Float?
+  ethylenePpm Float?
+  vocIndex    Float?
+  timestamp   DateTime @default(now())
+
+  @@index([location, timestamp])
+}
+
+model ShoppingItem {
+  id          String   @id @default(uuid())
+  name        String
+  quantity    Float    @default(1)
+  unit        String   @default("item")
+  reason      String?
+  status      String   @default("NEEDED")
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  @@index([status, createdAt])
 }
