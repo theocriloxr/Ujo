@@ -13,11 +13,13 @@ import http from 'http';
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import QRCode from 'qrcode';
-import { AttemptLimiter, assertProductionSecrets, hashPin, safeEqualText, verifyPin } from './src/services/security.ts';
+import { AttemptLimiter, assertProductionSecrets, hashCredential, hashPin, newSessionToken, safeEqualText, sessionTokenHash, verifyCredential, verifyPin } from './src/services/security.ts';
 import { isBridgeAction, isLoopbackAddress } from './src/services/bridgePolicy.ts';
 import { OllamaService } from './src/services/OllamaService.ts';
 import { evaluateProposedAction } from './src/services/commandPolicy.ts';
 import { estimateFreshness } from './src/services/FoodIntelligence.ts';
+import { assessMaintenance } from './src/services/InfrastructureIntelligence.ts';
+import { validateAutomationDefinition } from './src/services/AutomationPolicy.ts';
 
 // --- CONFIGURATION ---
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
@@ -27,6 +29,7 @@ const OWNER_PIN = process.env.UJO_OWNER_PIN || '1234';
 const DURESS_PIN = process.env.UJO_DURESS_PIN || '9999';
 const STAFF_PIN = process.env.UJO_STAFF_PIN || '2468';
 const pinLimiter = new AttemptLimiter(5, 60_000);
+const loginLimiter = new AttemptLimiter(5, 15 * 60_000);
 const allowedOrigins = (process.env.APP_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean);
 
 // --- ENTERPRISE HUB SERVICES ---
@@ -41,6 +44,22 @@ const haBridge = new HABridge({
 });
 
 let io: Server;
+
+function cookieValue(header: string | undefined, name: string): string | undefined {
+  return header?.split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+async function authenticateSessionToken(token: string | undefined) {
+  if (!token) return null;
+  const session = await prisma.userSession.findUnique({ where: { tokenHash: sessionTokenHash(token) } });
+  if (!session || session.revoked || session.expiresAt <= new Date()) return null;
+  const user = await prisma.userAccount.findUnique({ where: { id: session.userId } });
+  if (!user || user.disabled) return null;
+  if (Date.now() - session.lastSeenAt.getTime() > 5 * 60_000) {
+    await prisma.userSession.update({ where: { id: session.id }, data: { lastSeenAt: new Date() } });
+  }
+  return { session, user };
+}
 
 async function seedData() {
   // 1. Initial System Configuration
@@ -101,6 +120,14 @@ async function seedData() {
     where: { id: 'duress_primary' },
     update: { pinHash: hashPin(DURESS_PIN), role: 'DURESS' },
     create: { id: 'duress_primary', name: 'Duress Profile', role: 'DURESS', pinHash: hashPin(DURESS_PIN) }
+  });
+
+  const adminEmail = (process.env.UJO_ADMIN_EMAIL || 'admin@ujo.local').trim().toLowerCase();
+  const adminPassword = process.env.UJO_ADMIN_PASSWORD || 'ujo-development-password';
+  await prisma.userAccount.upsert({
+    where: { email: adminEmail },
+    update: {},
+    create: { email: adminEmail, displayName: 'Home Owner', role: 'OWNER', passwordHash: hashCredential(adminPassword) }
   });
 }
 
@@ -496,6 +523,20 @@ async function startServer() {
 
   await haBridge.connect();
 
+  io.use(async (socket, next) => {
+    try {
+      const token = typeof socket.handshake.auth?.token === 'string'
+        ? socket.handshake.auth.token
+        : cookieValue(socket.handshake.headers.cookie, 'ujo_session');
+      const auth = await authenticateSessionToken(token);
+      if (!auth) return next(new Error('Authentication required.'));
+      socket.data.userId = auth.user.id;
+      next();
+    } catch {
+      next(new Error('Authentication failed.'));
+    }
+  });
+
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
     socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
@@ -570,6 +611,68 @@ async function startServer() {
     } catch (error) {
       console.error('Bridge execution failed:', error);
       return res.status(500).json({ status: 'error', error: 'Bridge execution failed.' });
+    }
+  });
+
+  app.post('/api/auth/login', async (req, res) => {
+    const { email, password, clientType = 'web' } = req.body ?? {};
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    const attemptKey = `login:${req.ip}:${normalizedEmail}`;
+    const attempt = loginLimiter.consume(attemptKey);
+    if (!attempt.allowed) {
+      res.setHeader('Retry-After', attempt.retryAfterSeconds);
+      return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+    }
+    const user = normalizedEmail ? await prisma.userAccount.findUnique({ where: { email: normalizedEmail } }) : null;
+    if (!user || user.disabled || typeof password !== 'string' || !verifyCredential(password, user.passwordHash)) {
+      await stateManager.logSecurityEvent('ACCOUNT_LOGIN', normalizedEmail || 'unknown', 'FAILURE');
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+    loginLimiter.reset(attemptKey);
+    const token = newSessionToken();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60_000);
+    await prisma.userSession.create({ data: { userId: user.id, tokenHash: sessionTokenHash(token), expiresAt } });
+    await stateManager.logSecurityEvent('ACCOUNT_LOGIN', user.id, 'SUCCESS');
+    if (clientType !== 'mobile') {
+      res.cookie('ujo_session', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        expires: expiresAt,
+        path: '/'
+      });
+    }
+    res.json({
+      user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
+      expiresAt,
+      token: clientType === 'mobile' ? token : undefined
+    });
+  });
+
+  app.get('/api/auth/me', async (req, res) => {
+    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const auth = await authenticateSessionToken(bearer || cookieValue(req.headers.cookie, 'ujo_session'));
+    if (!auth) return res.status(401).json({ error: 'Authentication required.' });
+    res.json({ id: auth.user.id, email: auth.user.email, displayName: auth.user.displayName, role: auth.user.role });
+  });
+
+  app.post('/api/auth/logout', async (req, res) => {
+    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const token = bearer || cookieValue(req.headers.cookie, 'ujo_session');
+    if (token) await prisma.userSession.updateMany({ where: { tokenHash: sessionTokenHash(token) }, data: { revoked: true } });
+    res.clearCookie('ujo_session', { path: '/' });
+    res.json({ success: true });
+  });
+
+  app.use('/api', async (req, res, next) => {
+    try {
+      const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+      const auth = await authenticateSessionToken(bearer || cookieValue(req.headers.cookie, 'ujo_session'));
+      if (!auth) return res.status(401).json({ error: 'Authentication required.' });
+      res.locals.user = { id: auth.user.id, role: auth.user.role };
+      next();
+    } catch {
+      res.status(401).json({ error: 'Authentication failed.' });
     }
   });
 
@@ -881,6 +984,175 @@ async function startServer() {
     } catch {
       res.status(404).json({ error: 'Shopping item not found.' });
     }
+  });
+
+  app.get('/api/maintenance/assets', async (_req, res) => {
+    const assets = await prisma.maintenanceAsset.findMany({ orderBy: { name: 'asc' } });
+    res.json(assets.map(asset => ({ ...asset, assessment: assessMaintenance({ ...asset, measuredHealthScore: asset.healthScore }) })));
+  });
+
+  app.post('/api/maintenance/assets', async (req, res) => {
+    const { name, kind, deviceId, nodeId, manufacturer, model, installedAt, serviceIntervalDays, serviceIntervalHours, expectedLifeHours, notes } = req.body ?? {};
+    if (typeof name !== 'string' || !name.trim() || typeof kind !== 'string' || !kind.trim()) return res.status(400).json({ error: 'Asset name and kind are required.' });
+    const positiveOptional = [serviceIntervalDays, serviceIntervalHours, expectedLifeHours].every(value => value === undefined || (Number.isFinite(Number(value)) && Number(value) > 0));
+    if (!positiveOptional) return res.status(400).json({ error: 'Maintenance intervals must be positive.' });
+    const installed = installedAt ? new Date(installedAt) : new Date();
+    if (Number.isNaN(installed.getTime())) return res.status(400).json({ error: 'Installed date is invalid.' });
+    res.status(201).json(await prisma.maintenanceAsset.create({ data: {
+      name: name.trim().slice(0, 200), kind: kind.trim().slice(0, 100), deviceId: deviceId || null, nodeId: nodeId || null,
+      manufacturer: manufacturer ? String(manufacturer).slice(0, 100) : null, model: model ? String(model).slice(0, 100) : null,
+      installedAt: installed, serviceIntervalDays: serviceIntervalDays ? Number(serviceIntervalDays) : null,
+      serviceIntervalHours: serviceIntervalHours ? Number(serviceIntervalHours) : null, expectedLifeHours: expectedLifeHours ? Number(expectedLifeHours) : null,
+      notes: notes ? String(notes).slice(0, 1000) : null
+    } }));
+  });
+
+  app.post('/api/maintenance/assets/:id/service', async (req, res) => {
+    const { pin, notes } = req.body ?? {};
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) return res.status(403).json({ error: 'Owner authentication required.' });
+    const asset = await prisma.maintenanceAsset.findUnique({ where: { id: req.params.id } });
+    if (!asset) return res.status(404).json({ error: 'Maintenance asset not found.' });
+    const now = new Date();
+    const [, event] = await prisma.$transaction([
+      prisma.maintenanceAsset.update({ where: { id: asset.id }, data: { lastServicedAt: now, status: 'HEALTHY', healthScore: 100 } }),
+      prisma.maintenanceEvent.create({ data: { assetId: asset.id, type: 'SERVICE', notes: notes ? String(notes).slice(0, 1000) : null, runtimeHours: asset.runtimeHours, completedAt: now } })
+    ]);
+    res.json(event);
+  });
+
+  app.get('/api/water/tanks', async (_req, res) => {
+    const tanks = await prisma.waterTank.findMany({ orderBy: { name: 'asc' } });
+    res.json(await Promise.all(tanks.map(async tank => ({
+      ...tank,
+      currentLitres: Math.round(tank.capacityLitres * tank.currentLevelPct / 100),
+      latestReading: await prisma.waterReading.findFirst({ where: { tankId: tank.id }, orderBy: { timestamp: 'desc' } })
+    }))));
+  });
+
+  app.post('/api/water/tanks', async (req, res) => {
+    const { pin, name, nodeId, capacityLitres, lowLevelPct = 15, highLevelPct = 95, pumpNodeId, autoPump = false } = req.body ?? {};
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) return res.status(403).json({ error: 'Owner authentication required.' });
+    if (typeof name !== 'string' || typeof nodeId !== 'string' || !Number.isFinite(Number(capacityLitres)) || Number(capacityLitres) <= 0) return res.status(400).json({ error: 'Name, sensor node, and positive capacity are required.' });
+    if (Number(lowLevelPct) < 0 || Number(highLevelPct) > 100 || Number(lowLevelPct) >= Number(highLevelPct)) return res.status(400).json({ error: 'Tank thresholds are invalid.' });
+    const sensorNode = await prisma.hardwareNode.findUnique({ where: { id: nodeId } });
+    if (!sensorNode?.provisioned) return res.status(409).json({ error: 'Tank sensor node must be provisioned first.' });
+    if (pumpNodeId) {
+      const pump = await prisma.hardwareNode.findUnique({ where: { id: pumpNodeId } });
+      if (!pump?.provisioned || pump.safetyClass !== 'CRITICAL') return res.status(409).json({ error: 'Pump must be a provisioned CRITICAL node.' });
+    }
+    res.status(201).json(await prisma.waterTank.create({ data: {
+      name: name.trim().slice(0, 200), nodeId, capacityLitres: Number(capacityLitres), lowLevelPct: Number(lowLevelPct),
+      highLevelPct: Number(highLevelPct), pumpNodeId: pumpNodeId || null, autoPump: Boolean(autoPump)
+    } }));
+  });
+
+  app.get('/api/energy/policy', async (_req, res) => {
+    res.json(await prisma.energyPolicy.upsert({ where: { id: 'GLOBAL' }, update: {}, create: { id: 'GLOBAL' } }));
+  });
+
+  app.put('/api/energy/policy', async (req, res) => {
+    const { pin, minimumMainsVoltage, maximumMainsVoltage, inverterReservePct, inverterMaxWatts, generatorMaxWatts, restoreStableSeconds, mainsContactorNodeId, automaticProtection } = req.body ?? {};
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) return res.status(403).json({ error: 'Owner authentication required.' });
+    const values = [minimumMainsVoltage, maximumMainsVoltage, inverterReservePct, inverterMaxWatts, generatorMaxWatts, restoreStableSeconds].map(Number);
+    if (values.some(value => !Number.isFinite(value) || value <= 0) || Number(minimumMainsVoltage) >= Number(maximumMainsVoltage) || Number(inverterReservePct) >= 100) {
+      return res.status(400).json({ error: 'Energy policy values are invalid.' });
+    }
+    if (mainsContactorNodeId) {
+      const node = await prisma.hardwareNode.findUnique({ where: { id: mainsContactorNodeId } });
+      if (!node?.provisioned || node.safetyClass !== 'CRITICAL') return res.status(409).json({ error: 'Mains contactor must be a provisioned CRITICAL node.' });
+    }
+    res.json(await prisma.energyPolicy.upsert({ where: { id: 'GLOBAL' }, create: {
+      id: 'GLOBAL', minimumMainsVoltage: Number(minimumMainsVoltage), maximumMainsVoltage: Number(maximumMainsVoltage), inverterReservePct: Number(inverterReservePct),
+      inverterMaxWatts: Number(inverterMaxWatts), generatorMaxWatts: Number(generatorMaxWatts), restoreStableSeconds: Number(restoreStableSeconds),
+      mainsContactorNodeId: mainsContactorNodeId || null, automaticProtection: Boolean(automaticProtection)
+    }, update: {
+      minimumMainsVoltage: Number(minimumMainsVoltage), maximumMainsVoltage: Number(maximumMainsVoltage), inverterReservePct: Number(inverterReservePct),
+      inverterMaxWatts: Number(inverterMaxWatts), generatorMaxWatts: Number(generatorMaxWatts), restoreStableSeconds: Number(restoreStableSeconds),
+      mainsContactorNodeId: mainsContactorNodeId || null, automaticProtection: Boolean(automaticProtection)
+    } }));
+  });
+
+  app.get('/api/energy/loads', async (_req, res) => {
+    res.json(await prisma.energyLoad.findMany({ orderBy: [{ priority: 'asc' }, { name: 'asc' }] }));
+  });
+
+  app.post('/api/energy/loads', async (req, res) => {
+    const { pin, deviceId, hardwareNodeId, name, priority = 3, ratedWatts, sheddable = true, compressorLoad = false, minimumOffSeconds = 180, restoreMode = 'MANUAL' } = req.body ?? {};
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) return res.status(403).json({ error: 'Owner authentication required.' });
+    if (!(await prisma.device.findUnique({ where: { id: deviceId } }))) return res.status(404).json({ error: 'Device not found.' });
+    if (hardwareNodeId) {
+      const node = await prisma.hardwareNode.findUnique({ where: { id: hardwareNodeId } });
+      if (!node?.provisioned || node.safetyClass !== 'CRITICAL') return res.status(409).json({ error: 'Energy relay must be a provisioned CRITICAL node.' });
+    }
+    if (typeof name !== 'string' || !Number.isInteger(Number(priority)) || Number(priority) < 1 || Number(priority) > 5 || !Number.isFinite(Number(ratedWatts)) || Number(ratedWatts) <= 0 || !['MANUAL', 'AUTO'].includes(restoreMode)) {
+      return res.status(400).json({ error: 'Energy load configuration is invalid.' });
+    }
+    res.status(201).json(await prisma.energyLoad.create({ data: {
+      deviceId, hardwareNodeId: hardwareNodeId || null, name: name.trim().slice(0, 200), priority: Number(priority), ratedWatts: Number(ratedWatts),
+      sheddable: Boolean(sheddable), compressorLoad: Boolean(compressorLoad), minimumOffSeconds: Math.max(0, Number(minimumOffSeconds) || 0), restoreMode
+    } }));
+  });
+
+  app.get('/api/automations', async (_req, res) => {
+    const rules = await prisma.automationRule.findMany({ orderBy: { name: 'asc' } });
+    res.json(rules.map(rule => ({ ...rule, triggerConfig: JSON.parse(rule.triggerConfig), conditions: JSON.parse(rule.conditions), actions: JSON.parse(rule.actions) })));
+  });
+
+  app.post('/api/automations', async (req, res) => {
+    const errors = validateAutomationDefinition(req.body ?? {});
+    if (errors.length) return res.status(400).json({ errors });
+    const { name, triggerType, triggerConfig = {}, conditions = [], actions, mode = 'SINGLE', maxRuns = 1, cooldownSeconds = 0 } = req.body;
+    res.status(201).json(await prisma.automationRule.create({ data: {
+      name: name.trim().slice(0, 200), triggerType, triggerConfig: JSON.stringify(triggerConfig), conditions: JSON.stringify(conditions), actions: JSON.stringify(actions),
+      mode, maxRuns: Math.max(1, Math.min(25, Number(maxRuns) || 1)), cooldownSeconds: Math.max(0, Number(cooldownSeconds) || 0)
+    } }));
+  });
+
+  app.patch('/api/automations/:id', async (req, res) => {
+    if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'Enabled must be boolean.' });
+    try { res.json(await prisma.automationRule.update({ where: { id: req.params.id }, data: { enabled: req.body.enabled } })); }
+    catch { res.status(404).json({ error: 'Automation not found.' }); }
+  });
+
+  app.get('/api/notifications', async (_req, res) => {
+    res.json(await prisma.notification.findMany({ orderBy: { createdAt: 'desc' }, take: 200 }));
+  });
+
+  app.patch('/api/notifications/:id/read', async (req, res) => {
+    try { res.json(await prisma.notification.update({ where: { id: req.params.id }, data: { status: 'READ', readAt: new Date() } })); }
+    catch { res.status(404).json({ error: 'Notification not found.' }); }
+  });
+
+  app.get('/api/geofences', async (_req, res) => {
+    res.json(await prisma.geofencePlace.findMany({ orderBy: { name: 'asc' } }));
+  });
+
+  app.post('/api/geofences', async (req, res) => {
+    const { pin, name, category, latitude, longitude, radiusMetres = 250 } = req.body ?? {};
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) return res.status(403).json({ error: 'Owner authentication required.' });
+    if (typeof name !== 'string' || typeof category !== 'string' || !Number.isFinite(Number(latitude)) || Math.abs(Number(latitude)) > 90 || !Number.isFinite(Number(longitude)) || Math.abs(Number(longitude)) > 180 || Number(radiusMetres) < 50 || Number(radiusMetres) > 5000) {
+      return res.status(400).json({ error: 'Geofence configuration is invalid.' });
+    }
+    res.status(201).json(await prisma.geofencePlace.create({ data: {
+      name: name.trim().slice(0, 200), category: category.trim().toUpperCase().slice(0, 50), latitude: Number(latitude), longitude: Number(longitude), radiusMetres: Number(radiusMetres)
+    } }));
+  });
+
+  app.post('/api/geofences/:id/event', async (req, res) => {
+    const event = String(req.body?.event || '').toUpperCase();
+    if (!['ENTER', 'EXIT'].includes(event)) return res.status(400).json({ error: 'Geofence event must be ENTER or EXIT.' });
+    const place = await prisma.geofencePlace.findUnique({ where: { id: req.params.id } });
+    if (!place?.enabled) return res.status(404).json({ error: 'Geofence not found or disabled.' });
+    let notification = null;
+    if (event === 'ENTER' && place.category === 'SUPERMARKET') {
+      const shopping = await prisma.shoppingItem.findMany({ where: { status: 'NEEDED' }, orderBy: { createdAt: 'asc' } });
+      if (shopping.length) notification = await prisma.notification.create({ data: {
+        type: 'GEOFENCE_SHOPPING', priority: 'NORMAL', title: `Shopping reminder near ${place.name}`,
+        message: `You have ${shopping.length} needed item${shopping.length === 1 ? '' : 's'}: ${shopping.slice(0, 5).map(item => item.name).join(', ')}${shopping.length > 5 ? '…' : ''}`,
+        data: JSON.stringify({ placeId: place.id, shoppingItemIds: shopping.map(item => item.id) })
+      } });
+    }
+    res.json({ success: true, notification, privacy: 'No continuous device coordinates were stored.' });
   });
 
   app.post('/api/voice/synthesize', async (req, res) => {

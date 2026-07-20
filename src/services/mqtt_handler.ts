@@ -5,6 +5,8 @@ import { Server } from 'socket.io';
 import { PrismaClient } from '@prisma/client';
 import { HardwareReplayGuard, parseNodeKeys, type HardwareEnvelope } from './hardwareProtocol.ts';
 import { signEnvelope } from './hardwareProtocol.ts';
+import { assessMaintenance, assessWater } from './InfrastructureIntelligence.ts';
+import { planEnergySafety } from './EnergyOrchestrator.ts';
 
 export interface HardwareBus {
   connected(): boolean;
@@ -58,6 +60,44 @@ export function setupMQTT(io: Server, prisma: PrismaClient) {
     }
   });
 
+  const sendHardwareCommand = async (commandId: string, nodeId: string, action: string, value?: string) => {
+    const secret = nodeKeys.get(nodeId);
+    if (!secret) throw new Error('Node is not provisioned on this hub.');
+    const node = await prisma.$transaction(async transaction => {
+      const existing = await transaction.hardwareNode.findUnique({ where: { id: nodeId } });
+      if (!existing) throw new Error('Hardware node has not checked in.');
+      return transaction.hardwareNode.update({ where: { id: nodeId }, data: { commandSequence: { increment: 1 } } });
+    });
+    const commandValue = action === 'set_relay' ? value === 'true' : value;
+    const payload = { commandId, action, value: commandValue };
+    const unsigned = { v: 1 as const, nodeId, seq: node.commandSequence, timestamp: Math.floor(Date.now() / 1000), type: 'command' as const, payload };
+    const envelope = { ...unsigned, signature: signEnvelope(unsigned, secret) };
+    await new Promise<void>((resolve, reject) => {
+      client.publish(`ujo/v1/nodes/${nodeId}/command`, JSON.stringify(envelope), { qos: 1 }, error => error ? reject(error) : resolve());
+    });
+  };
+
+  const requestProtectiveOff = async (nodeId: string, reason: string, requestedBy: string) => {
+    if (!client.connected) return;
+    const node = await prisma.hardwareNode.findUnique({ where: { id: nodeId } });
+    const allowed = node?.provisioned && node.safetyClass === 'CRITICAL' && (JSON.parse(node.allowedActions || '[]') as string[]).includes('set_relay');
+    if (!allowed) return;
+    const active = await prisma.hardwareCommand.findFirst({ where: {
+      nodeId, requestedBy, status: { in: ['APPROVING', 'SENT'] }, createdAt: { gte: new Date(Date.now() - 5 * 60_000) }
+    } });
+    if (active) return;
+    const command = await prisma.hardwareCommand.create({ data: {
+      nodeId, action: 'set_relay', value: 'false', status: 'APPROVING', requestedBy, reason,
+      expiresAt: new Date(Date.now() + 60_000), approvedAt: new Date()
+    } });
+    try {
+      await sendHardwareCommand(command.id, command.nodeId, command.action, command.value ?? undefined);
+      await prisma.hardwareCommand.update({ where: { id: command.id }, data: { status: 'SENT' } });
+    } catch (error) {
+      await prisma.hardwareCommand.update({ where: { id: command.id }, data: { status: 'FAILED', error: error instanceof Error ? error.message : 'Protective stop failed.' } });
+    }
+  };
+
   const processPayload = async (nodeId: string, data: Record<string, unknown>, timestamp = new Date()) => {
     const location = String(data.room || nodeId);
     const context = {
@@ -91,6 +131,89 @@ export function setupMQTT(io: Server, prisma: PrismaClient) {
           timestamp
         }
       });
+    }
+    if (data.kind === 'water') {
+      const tank = await prisma.waterTank.findUnique({ where: { nodeId } });
+      if (tank) {
+        const levelPct = numberValue(data.tankLevelPct);
+        const flowLitresMinute = data.flowLitresMinute === undefined ? null : numberValue(data.flowLitresMinute);
+        const pumpRunning = Boolean(data.pumpRunning);
+        const leakDetected = Boolean(data.leakDetected);
+        const assessment = assessWater({ levelPct, lowLevelPct: tank.lowLevelPct, highLevelPct: tank.highLevelPct, pumpRunning, flowLitresMinute, leakDetected });
+        await prisma.$transaction([
+          prisma.waterReading.create({ data: { tankId: tank.id, levelPct, flowLitresMinute, pumpRunning, leakDetected, timestamp } }),
+          prisma.waterTank.update({ where: { id: tank.id }, data: { currentLevelPct: levelPct, status: assessment.status, lastSeenAt: timestamp } })
+        ]);
+        for (const alert of assessment.alerts) {
+          const marker = `[${alert.code}]`;
+          const existing = await prisma.alert.findFirst({ where: { type: 'WATER', acknowledged: false, message: { contains: marker } } });
+          if (!existing) await prisma.alert.create({ data: { type: 'WATER', severity: alert.severity, message: `${marker} ${tank.name}: ${alert.message}` } });
+        }
+        if (assessment.protectiveAction === 'STOP_PUMP' && tank.pumpNodeId) {
+          await requestProtectiveOff(tank.pumpNodeId, `Protective ${assessment.protectiveAction}`, 'deterministic-water-safety');
+        }
+      }
+    }
+    if (data.kind === 'energy') {
+      const source = ['MAINS', 'INVERTER', 'GENERATOR', 'SOLAR'].includes(String(data.source)) ? String(data.source) as 'MAINS' | 'INVERTER' | 'GENERATOR' | 'SOLAR' : 'MAINS';
+      const voltage = numberValue(data.voltage);
+      const totalWatts = data.totalWatts === undefined
+        ? voltage * numberValue(data.current) * numberValue(data.powerFactor, 1)
+        : numberValue(data.totalWatts);
+      const batteryPct = data.batteryPct === undefined ? null : numberValue(data.batteryPct);
+      const policy = await prisma.energyPolicy.upsert({ where: { id: 'GLOBAL' }, update: {}, create: { id: 'GLOBAL' } });
+      await prisma.powerSnapshot.create({ data: {
+        source, voltage, totalWatts, batteryPct, solarWatts: data.solarWatts === undefined ? null : numberValue(data.solarWatts), timestamp
+      } });
+      await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { powerSource: source } });
+      const energyLoads = await prisma.energyLoad.findMany({ where: { enabled: true } });
+      const devices = await prisma.device.findMany({ where: { id: { in: energyLoads.map(load => load.deviceId) } } });
+      const stateById = new Map(devices.map(device => [device.id, device.state.toLowerCase()]));
+      const plan = planEnergySafety({
+        source, voltage, batteryPct, totalWatts,
+        minimumMainsVoltage: policy.minimumMainsVoltage, maximumMainsVoltage: policy.maximumMainsVoltage,
+        inverterReservePct: policy.inverterReservePct, inverterMaxWatts: policy.inverterMaxWatts, generatorMaxWatts: policy.generatorMaxWatts
+      }, energyLoads.map(load => ({
+        id: load.id, name: load.name, priority: load.priority, ratedWatts: load.ratedWatts,
+        sheddable: load.sheddable, compressorLoad: load.compressorLoad, isOn: stateById.get(load.deviceId) === 'on'
+      })));
+      for (const message of plan.alerts) {
+        const marker = '[ENERGY-POLICY]';
+        const existing = await prisma.alert.findFirst({ where: { type: 'ENERGY', acknowledged: false, message: { contains: message } } });
+        if (!existing) await prisma.alert.create({ data: { type: 'ENERGY', severity: plan.isolateMains ? 'CRITICAL' : 'HIGH', message: `${marker} ${message}` } });
+      }
+      if (policy.automaticProtection) {
+        if (plan.isolateMains && policy.mainsContactorNodeId) {
+          await requestProtectiveOff(policy.mainsContactorNodeId, 'Unsafe mains voltage isolation', 'deterministic-energy-safety');
+        }
+        for (const item of plan.shed) {
+          const load = energyLoads.find(candidate => candidate.id === item.loadId);
+          if (load?.hardwareNodeId) await requestProtectiveOff(load.hardwareNodeId, item.reason, 'deterministic-energy-safety');
+        }
+      }
+    }
+    if (data.assetRuntimeHours !== undefined) {
+      const runtimeHours = numberValue(data.assetRuntimeHours);
+      const assets = await prisma.maintenanceAsset.findMany({ where: { nodeId } });
+      for (const asset of assets) {
+        if (runtimeHours < asset.runtimeHours) continue;
+        const assessment = assessMaintenance({
+          ...asset,
+          runtimeHours,
+          measuredHealthScore: data.healthScore === undefined ? asset.healthScore : numberValue(data.healthScore)
+        });
+        await prisma.maintenanceAsset.update({ where: { id: asset.id }, data: {
+          runtimeHours, healthScore: assessment.healthScore, status: assessment.status
+        } });
+        if (assessment.status !== 'HEALTHY') {
+          const marker = `[ASSET:${asset.id}]`;
+          const existing = await prisma.alert.findFirst({ where: { type: 'MAINTENANCE', acknowledged: false, message: { contains: marker } } });
+          if (!existing) await prisma.alert.create({ data: {
+            type: 'MAINTENANCE', severity: assessment.status === 'CRITICAL' ? 'HIGH' : 'MEDIUM',
+            message: `${marker} ${asset.name} is ${assessment.status.toLowerCase().replace('_', ' ')}.`
+          } });
+        }
+      }
     }
     if (data.voltage !== undefined) {
       await prisma.energyTelemetry.create({
@@ -170,32 +293,6 @@ export function setupMQTT(io: Server, prisma: PrismaClient) {
   return {
     connected: () => client.connected,
     hasKey: (nodeId: string) => nodeKeys.has(nodeId),
-    async sendCommand(commandId: string, nodeId: string, action: string, value?: string) {
-      const secret = nodeKeys.get(nodeId);
-      if (!secret) throw new Error('Node is not provisioned on this hub.');
-      const node = await prisma.$transaction(async transaction => {
-        const existing = await transaction.hardwareNode.findUnique({ where: { id: nodeId } });
-        if (!existing) throw new Error('Hardware node has not checked in.');
-        return transaction.hardwareNode.update({
-          where: { id: nodeId },
-          data: { commandSequence: { increment: 1 } }
-        });
-      });
-      const commandValue = action === 'set_relay' ? value === 'true' : value;
-      const payload = { commandId, action, value: commandValue };
-      const unsigned = {
-        v: 1 as const,
-        nodeId,
-        seq: node.commandSequence,
-        timestamp: Math.floor(Date.now() / 1000),
-        type: 'command' as const,
-        payload
-      };
-      const envelope = { ...unsigned, signature: signEnvelope(unsigned, secret) };
-      const topic = `ujo/v1/nodes/${nodeId}/command`;
-      await new Promise<void>((resolve, reject) => {
-        client.publish(topic, JSON.stringify(envelope), { qos: 1 }, error => error ? reject(error) : resolve());
-      });
-    }
+    sendCommand: sendHardwareCommand
   } satisfies HardwareBus;
 }

@@ -1,25 +1,42 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 
 const KEY_LENGTH = 64;
 const HASH_PREFIX = 'scrypt';
 
 export function hashPin(pin: string, salt = randomBytes(16).toString('hex')): string {
   assertValidPin(pin);
-  const digest = scryptSync(pin, salt, KEY_LENGTH).toString('hex');
+  return hashCredential(pin, salt);
+}
+
+export function hashCredential(value: string, salt = randomBytes(16).toString('hex')): string {
+  if (value.length < 1) throw new Error('Credential cannot be empty.');
+  const digest = scryptSync(value, salt, KEY_LENGTH).toString('hex');
   return `${HASH_PREFIX}$${salt}$${digest}`;
 }
 
 export function verifyPin(pin: string, encodedHash: string): boolean {
   if (!/^\d{4,12}$/.test(pin)) return false;
+  return verifyCredential(pin, encodedHash);
+}
+
+export function verifyCredential(value: string, encodedHash: string): boolean {
   const [algorithm, salt, expectedHex] = encodedHash.split('$');
   if (algorithm !== HASH_PREFIX || !salt || !expectedHex) return false;
   try {
     const expected = Buffer.from(expectedHex, 'hex');
-    const actual = scryptSync(pin, salt, expected.length);
+    const actual = scryptSync(value, salt, expected.length);
     return expected.length > 0 && timingSafeEqual(actual, expected);
   } catch {
     return false;
   }
+}
+
+export function sessionTokenHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+export function newSessionToken(): string {
+  return randomBytes(32).toString('base64url');
 }
 
 export function safeEqualText(actual: string, expected: string): boolean {
@@ -51,6 +68,8 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv): void {
     throw new Error('UJO_BRIDGE_TOKEN must contain at least 32 characters in production.');
   }
   if (!(env.APP_ORIGINS ?? '').trim()) throw new Error('APP_ORIGINS is required in production.');
+  if (!(env.UJO_ADMIN_EMAIL ?? '').includes('@')) throw new Error('UJO_ADMIN_EMAIL is required in production.');
+  if ((env.UJO_ADMIN_PASSWORD ?? '').length < 12) throw new Error('UJO_ADMIN_PASSWORD must contain at least 12 characters in production.');
 }
 
 type Attempt = { count: number; resetAt: number };

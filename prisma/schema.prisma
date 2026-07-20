@@ -220,3 +220,184 @@ model ShoppingItem {
 
   @@index([status, createdAt])
 }
+
+model MaintenanceAsset {
+  id                   String   @id @default(uuid())
+  name                 String
+  kind                 String
+  deviceId             String?
+  nodeId               String?
+  manufacturer         String?
+  model                 String?
+  installedAt          DateTime @default(now())
+  lastServicedAt       DateTime?
+  serviceIntervalDays  Int?
+  serviceIntervalHours Float?
+  expectedLifeHours    Float?
+  runtimeHours         Float    @default(0)
+  healthScore          Float    @default(100)
+  status               String   @default("HEALTHY")
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([status])
+  @@index([nodeId])
+}
+
+model MaintenanceEvent {
+  id          String   @id @default(uuid())
+  assetId     String
+  type        String
+  notes       String?
+  runtimeHours Float?
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  @@index([assetId, createdAt])
+}
+
+model WaterTank {
+  id             String   @id @default(uuid())
+  name           String
+  nodeId         String   @unique
+  capacityLitres Float
+  currentLevelPct Float   @default(0)
+  lowLevelPct    Float    @default(15)
+  highLevelPct   Float    @default(95)
+  pumpNodeId     String?
+  autoPump       Boolean  @default(false)
+  status         String   @default("UNKNOWN")
+  lastSeenAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model WaterReading {
+  id                Int      @id @default(autoincrement())
+  tankId            String
+  levelPct          Float
+  flowLitresMinute  Float?
+  pumpRunning       Boolean  @default(false)
+  leakDetected      Boolean  @default(false)
+  timestamp         DateTime @default(now())
+
+  @@index([tankId, timestamp])
+}
+
+model UserAccount {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  role         String   @default("OWNER")
+  disabled     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model UserSession {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  createdAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+
+  @@index([userId, expiresAt])
+}
+
+model EnergyPolicy {
+  id                    String  @id @default("GLOBAL")
+  minimumMainsVoltage   Float   @default(180)
+  maximumMainsVoltage   Float   @default(260)
+  inverterReservePct    Float   @default(25)
+  inverterMaxWatts      Float   @default(3000)
+  generatorMaxWatts     Float   @default(5000)
+  restoreStableSeconds  Int     @default(120)
+  mainsContactorNodeId  String?
+  automaticProtection  Boolean @default(true)
+  updatedAt             DateTime @updatedAt
+}
+
+model EnergyLoad {
+  id                String   @id @default(uuid())
+  deviceId          String   @unique
+  hardwareNodeId    String?
+  name              String
+  priority          Int      @default(3)
+  ratedWatts        Float
+  sheddable         Boolean  @default(true)
+  compressorLoad    Boolean  @default(false)
+  minimumOffSeconds Int      @default(180)
+  restoreMode       String   @default("MANUAL")
+  enabled           Boolean  @default(true)
+  updatedAt         DateTime @updatedAt
+}
+
+model PowerSnapshot {
+  id           Int      @id @default(autoincrement())
+  source       String
+  voltage      Float
+  totalWatts   Float
+  batteryPct   Float?
+  solarWatts   Float?
+  timestamp    DateTime @default(now())
+
+  @@index([timestamp])
+}
+
+model AutomationRule {
+  id              String   @id @default(uuid())
+  name            String
+  enabled         Boolean  @default(true)
+  triggerType     String
+  triggerConfig   String
+  conditions      String   @default("[]")
+  actions         String
+  mode            String   @default("SINGLE")
+  maxRuns         Int      @default(1)
+  cooldownSeconds Int      @default(0)
+  lastRunAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AutomationRun {
+  id           String   @id @default(uuid())
+  ruleId       String
+  eventType    String
+  eventPayload String
+  status       String
+  result       String?
+  startedAt    DateTime @default(now())
+  completedAt  DateTime?
+
+  @@index([ruleId, startedAt])
+}
+
+model Notification {
+  id         String   @id @default(uuid())
+  type       String
+  priority   String   @default("NORMAL")
+  title      String
+  message    String
+  data       String?
+  status     String   @default("UNREAD")
+  createdAt  DateTime @default(now())
+  readAt     DateTime?
+
+  @@index([status, createdAt])
+}
+
+model GeofencePlace {
+  id           String   @id @default(uuid())
+  name         String
+  category     String
+  latitude     Float
+  longitude    Float
+  radiusMetres Float    @default(250)
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+}
