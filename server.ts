@@ -6,6 +6,8 @@ import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import { ProactiveEngine } from './src/services/ProactiveEngine.ts';
 import { TranslatorService } from './src/services/TranslatorService.ts';
+import { LocalVoiceService } from './src/services/LocalVoiceService.ts';
+import { LocalSpeechService } from './src/services/LocalSpeechService.ts';
 import { setupMQTT } from './src/services/mqtt_handler.ts';
 import { startSimulation } from './virtual_house.ts';
 import { HABridge } from './ha_bridge.ts';
@@ -16,10 +18,11 @@ import QRCode from 'qrcode';
 import { AttemptLimiter, assertProductionSecrets, hashCredential, hashPin, newSessionToken, safeEqualText, sessionTokenHash, verifyCredential, verifyPin } from './src/services/security.ts';
 import { isBridgeAction, isLoopbackAddress } from './src/services/bridgePolicy.ts';
 import { OllamaService } from './src/services/OllamaService.ts';
-import { evaluateProposedAction } from './src/services/commandPolicy.ts';
+import { evaluateProposedAction, isSensitiveNaturalLanguage } from './src/services/commandPolicy.ts';
 import { estimateFreshness } from './src/services/FoodIntelligence.ts';
 import { assessMaintenance } from './src/services/InfrastructureIntelligence.ts';
 import { validateAutomationDefinition } from './src/services/AutomationPolicy.ts';
+import { AutomationEngine } from './src/services/AutomationEngine.ts';
 
 // --- CONFIGURATION ---
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
@@ -36,7 +39,10 @@ const allowedOrigins = (process.env.APP_ORIGINS || '').split(',').map(origin => 
 const prisma = new PrismaClient();
 const proactiveEngine = new ProactiveEngine(prisma);
 const translator = new TranslatorService();
+const localVoice = new LocalVoiceService();
+const localSpeech = new LocalSpeechService();
 const ollama = new OllamaService();
+const automationEngine = new AutomationEngine(prisma);
 
 const haBridge = new HABridge({
   url: process.env.HA_URL || 'http://localhost:8123',
@@ -422,12 +428,17 @@ class StateManager {
     await this.broadcastUpdate();
   }
 
-  async nlpParse(rawText: string, room?: string, securityFlags?: { voiceVerified: boolean, phonePresent: boolean }) {
+  async nlpParse(rawText: string, room?: string) {
     const text = rawText.toLowerCase();
+    if (isSensitiveNaturalLanguage(text)) {
+      return {
+        success: false,
+        vaultRequired: true,
+        response: 'Natural-language and voice inputs cannot authorize access or payments. Use the dedicated authenticated control.'
+      };
+    }
     const config = await prisma.systemConfig.findUnique({ where: { id: 'GLOBAL' } });
     const currentMode = config?.mode;
-
-    const { voiceVerified = false, phonePresent = false } = securityFlags || {};
 
     let responses: string[] = [];
     let success = false;
@@ -469,22 +480,9 @@ class StateManager {
       } 
       // TIER 2: VAULT (High Security - Phone or PIN Required)
       else if (cmd.includes('unlock') || cmd.includes('door open') || cmd.includes('gate') || cmd.includes('payment')) {
-        if (!phonePresent && !voiceVerified) {
-          responses.push("Security protocol violation. Authentication required.");
-          vaultRequired = true;
-        } else if (!phonePresent && voiceVerified) {
-          responses.push("Security protocol requires phone verification for Vault features. Please use the physical keypad PIN override.");
-          vaultRequired = true;
-        } else {
-          // Authorized
-          if (cmd.includes('unlock') || cmd.includes('door')) {
-             await this.updateDevice('lock_1', 'unlocked');
-             responses.push("Door unlocked. Welcome home, Admin.");
-          } else {
-             responses.push("Action authorized. Dispatching request.");
-          }
-          cmdProcessed = true;
-        }
+        responses.push("Voice and natural-language requests cannot authorize access or payments. Use the dedicated authenticated control.");
+        vaultRequired = true;
+        cmdProcessed = true;
       } else if (cmd.includes('energy') || cmd.includes('weather')) {
         responses.push("Tomorrow will be overcast. Run high-vampire loads today.");
         cmdProcessed = true;
@@ -1152,6 +1150,7 @@ async function startServer() {
         data: JSON.stringify({ placeId: place.id, shoppingItemIds: shopping.map(item => item.id) })
       } });
     }
+    await automationEngine.handleEvent('GEOFENCE', { placeId: place.id, category: place.category, event });
     res.json({ success: true, notification, privacy: 'No continuous device coordinates were stored.' });
   });
 
@@ -1161,12 +1160,35 @@ async function startServer() {
       return res.status(400).json({ error: 'Text must be between 1 and 1000 characters.' });
     }
     try {
+      try {
+        const local = await localVoice.synthesize(text.trim(), persona);
+        if (local) return res.json(local);
+      } catch (localError) {
+        console.warn('Local speech synthesis unavailable:', localError);
+      }
+      if (process.env.ALLOW_CLOUD_VOICE !== 'true') {
+        return res.status(503).json({ error: 'Local speech is unavailable and cloud voice is disabled.' });
+      }
       const audio = await translator.synthesizeSpeech(text.trim(), persona);
-      if (!audio) return res.status(503).json({ error: 'Cloud speech is not configured.' });
-      res.json({ audio, sampleRate: 24000, encoding: 'pcm_s16le' });
+      if (!audio) return res.status(503).json({ error: 'No speech engine is configured.' });
+      res.json({ audio, sampleRate: 24000, encoding: 'pcm_s16le', source: 'cloud' });
     } catch (error) {
       console.error('Speech synthesis error:', error);
       res.status(502).json({ error: 'Speech synthesis failed.' });
+    }
+  });
+
+  app.post('/api/voice/transcribe', express.raw({ type: ['audio/wav', 'audio/webm', 'audio/ogg', 'audio/mp4'], limit: '10mb' }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'A supported audio body is required.' });
+    const languageHeader = req.headers['x-ujo-language'];
+    const language = typeof languageHeader === 'string' && /^[a-z]{2,3}(-[A-Z]{2})?$/.test(languageHeader) ? languageHeader : undefined;
+    try {
+      const transcript = await localSpeech.transcribe(req.body, req.headers['content-type'] || 'audio/webm', language);
+      if (!transcript) return res.status(503).json({ error: 'Local speech recognition is not configured.' });
+      res.json(transcript);
+    } catch (error) {
+      console.error('Local speech recognition failed:', error);
+      res.status(502).json({ error: 'Local speech recognition failed.' });
     }
   });
 
@@ -1202,8 +1224,9 @@ async function startServer() {
 
   // NLP Parse
   app.post('/api/nlp-parse', async (req, res) => {
-    const { text, room, securityFlags } = req.body;
-    const result = await stateManager.nlpParse(text, room, securityFlags);
+    const { text, room } = req.body ?? {};
+    if (typeof text !== 'string' || !text.trim() || text.length > 2_000) return res.status(400).json({ error: 'Text must be between 1 and 2000 characters.' });
+    const result = await stateManager.nlpParse(text, typeof room === 'string' ? room : undefined);
     res.json(result);
   });
 
@@ -1301,28 +1324,22 @@ async function startServer() {
 
   // OVER-THE-AIR (OTA) UPDATE MANAGER
   app.post('/api/system/check-update', async (req, res) => {
-    await stateManager.triggerAnomaly(
-      'System-Wide OTA Update Ready',
-      'Ujo OS V2.1.0 & Mobile App V1.2.0 are ready. Install updates now?',
-      'medium',
-      'system'
-    );
-    res.json({ success: true });
+    res.status(501).json({
+      error: 'No signed update channel is configured. Ujo will not invent or install an unverified update.',
+      required: ['signed manifest URL', 'trusted release public key', 'rollback partition or previous container image']
+    });
   });
 
   // WHATSAPP VENDOR DISPATCH
   app.post('/api/vendor/dispatch', async (req, res) => {
-    const { vendorType } = req.body; // 'diesel' or 'water'
-    // Simulated WhatsApp API call
-    console.log(`[WHATSAPP API] Sending message to ${vendorType === 'diesel' ? process.env.VENDOR_DIESEL_CONTACT : '+local'}`);
-    
-    await stateManager.triggerAnomaly(
-      'Vendor Auto-Dispatch',
-      `WhatsApp message sent to local ${vendorType} vendor. Expect delivery shortly.`,
-      'low',
-      'vendor'
-    );
-    res.json({ success: true, message: `Dispatched ${vendorType} via WhatsApp Edge Module.` });
+    const vendorType = String(req.body?.vendorType || '').toLowerCase();
+    if (!['diesel', 'water'].includes(vendorType)) return res.status(400).json({ error: 'vendorType must be diesel or water.' });
+    const notification = await prisma.notification.create({ data: {
+      type: 'VENDOR_DISPATCH_APPROVAL', priority: 'HIGH', title: `${vendorType} order needs approval`,
+      message: `Review quantity, price, vendor identity and delivery address before contacting the ${vendorType} vendor.`,
+      data: JSON.stringify({ vendorType, status: 'PENDING_APPROVAL' })
+    } });
+    res.status(202).json({ success: true, dispatched: false, notificationId: notification.id, status: 'PENDING_APPROVAL' });
   });
 
   // GUEST QR CODE GENERATOR
@@ -1388,6 +1405,7 @@ async function startServer() {
   });
 
   app.post('/api/system/simulate-tracking', async (req, res) => {
+    if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Simulation endpoints are disabled in production.' });
     // Spatial Ghosting Scenario Simulation
     io.emit('state-update'); // Ping client to refresh just in case
     
@@ -1419,11 +1437,11 @@ async function startServer() {
   });
 
   app.post('/api/system/onboarding/qr-handshake', (req, res) => {
-    res.json({ success: true, message: 'Cryptographic link established. No cloud registration required.' });
+    res.json({ success: true, securityEffect: 'NONE', message: 'Onboarding step acknowledged. Authentication remains bound to the current account session.' });
   });
 
   app.post('/api/system/onboarding/voice-calibrate', (req, res) => {
-    res.json({ success: true, message: 'Voice signature localized. User A identified as SuperAdmin.' });
+    res.json({ success: true, securityEffect: 'NONE', biometricStored: false, message: 'Microphone guidance completed; voice is not an authentication factor.' });
   });
 
   app.post('/api/system/vault/auth', async (req, res) => {

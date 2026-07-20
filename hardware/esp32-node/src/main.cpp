@@ -7,6 +7,7 @@
 #include <mbedtls/md.h>
 #include <time.h>
 #include "config.h"
+#include "device_profile.h"
 
 WiFiClientSecure tlsClient;
 PubSubClient mqtt(tlsClient);
@@ -90,7 +91,9 @@ void handleCommand(char *, byte *bytes, unsigned int length) {
     setRelay(payload["value"].as<bool>());
     acknowledge(commandId, true, "relay-updated");
   } else {
-    acknowledge(commandId, false, "unsupported-command");
+    String message;
+    if (handleProfileCommand(action, payload, message)) acknowledge(commandId, true, message.c_str());
+    else acknowledge(commandId, false, "unsupported-command");
   }
 }
 
@@ -117,6 +120,7 @@ void setup() {
   Serial.begin(115200);
   pinMode(UJO_RELAY_PIN, OUTPUT);
   setRelay(UJO_FAILSAFE_RELAY_ON);
+  setupDeviceProfile();
   preferences.begin("ujo", false);
   outboundSequence = preferences.getUInt("outSeq", 0);
   highestCommandSequence = preferences.getUInt("cmdSeq", 0);
@@ -146,7 +150,7 @@ void loop() {
     payload["firmwareVersion"] = UJO_FIRMWARE_VERSION;
     payload["wifiRssi"] = WiFi.RSSI();
     payload["uptimeSeconds"] = millis() / 1000;
-    payload["analogRaw"] = analogRead(UJO_ANALOG_SENSOR_PIN);
+    appendProfileTelemetry(payload);
     publishEnvelope("telemetry", payload);
   }
 }

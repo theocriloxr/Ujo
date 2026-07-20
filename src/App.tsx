@@ -397,10 +397,13 @@ const TelemetryStrip = ({ history }: { history: any[] }) => {
   );
 };
 
-const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZone, voiceConfidence, isVoiceVerified }: { 
+const VoiceCommandOverlay = ({ isOpen, onClose, onSend, onRecord, recording, transcribing, input, setInput, activeZone, voiceConfidence, isVoiceVerified }: {
   isOpen: boolean, 
   onClose: () => void, 
   onSend: (e: React.FormEvent) => void, 
+  onRecord: () => void,
+  recording: boolean,
+  transcribing: boolean,
   input: string, 
   setInput: (s: string) => void,
   activeZone: string,
@@ -425,25 +428,23 @@ const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZ
 
         <motion.div 
           animate={{ 
-            scale: isVoiceVerified ? [1, 1.25, 1] : [1, 1.1, 1],
-            boxShadow: isVoiceVerified 
-              ? ["0 0 60px rgba(34,211,238,0.4)", "0 0 120px rgba(34,211,238,0.8)", "0 0 60px rgba(34,211,238,0.4)"]
-              : ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]
+            scale: recording ? [1, 1.2, 1] : [1, 1.05, 1],
+            boxShadow: ["0 0 20px rgba(250,204,21,0.2)", "0 0 60px rgba(250,204,21,0.4)", "0 0 20px rgba(250,204,21,0.2)"]
           }}
-          transition={{ duration: isVoiceVerified ? 0.8 : 2, repeat: Infinity }}
-          className={`w-32 h-32 rounded-full border-4 flex items-center justify-center mb-10 transition-all duration-1000 ${isVoiceVerified ? 'bg-cyan-500/10 border-cyan-400 shadow-[0_0_80px_rgba(34,211,238,0.3)]' : 'bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]'}`}
+          transition={{ duration: recording ? 0.8 : 2, repeat: Infinity }}
+          className="w-32 h-32 rounded-full border-4 flex items-center justify-center mb-10 bg-[var(--accent-gold)]/10 border-[var(--accent-gold)]"
         >
-           {isVoiceVerified ? <CheckCircle size={56} className="text-cyan-400" /> : <Mic size={48} className="text-[var(--accent-gold)]" />}
+           <Mic size={48} className={recording ? 'text-red-400' : 'text-[var(--accent-gold)]'} />
         </motion.div>
 
         <div className="max-w-2xl w-full">
            <div className="flex flex-col items-center gap-4 mb-12">
-              <span className={`mono-data text-xs tracking-[0.5em] uppercase transition-colors duration-500 ${isVoiceVerified ? 'text-cyan-400' : 'text-[var(--accent-gold)]'}`}>
-                {isVoiceVerified ? 'SECURE IDENTITY CONFIRMED' : `Listening in ${activeZone}`}
+              <span className="mono-data text-xs tracking-[0.5em] uppercase text-[var(--accent-gold)]">
+                {transcribing ? 'Transcribing locally' : recording ? `Recording in ${activeZone}` : 'Voice is input, not identity'}
               </span>
                <div className="flex flex-col items-center gap-2 w-full max-w-sm">
                  <div className="flex items-center justify-between w-full mb-1">
-                    <span className="mono-data text-[8px] text-zinc-500 uppercase tracking-widest">Biometric Match Integrity</span>
+                    <span className="mono-data text-[8px] text-zinc-500 uppercase tracking-widest">Transcript confidence (not identity)</span>
                     <motion.span 
                       animate={{ scale: [1, 1.1, 1] }}
                       transition={{ duration: 0.5, repeat: Infinity }}
@@ -461,7 +462,7 @@ const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZ
                       className={`h-full transition-colors duration-1000 ${voiceConfidence > 90 ? 'bg-cyan-400' : voiceConfidence > 80 ? 'bg-green-500' : 'bg-yellow-500'}`}
                     />
                  </div>
-                 {isVoiceVerified && (
+                 {false && isVoiceVerified && (
                    <motion.span 
                     initial={{ opacity: 0, y: 5 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -473,6 +474,9 @@ const VoiceCommandOverlay = ({ isOpen, onClose, onSend, input, setInput, activeZ
               </div>
            </div>
 
+           <button type="button" onClick={onRecord} disabled={transcribing} className="mb-6 px-5 py-3 rounded-full border border-white/15 text-xs uppercase tracking-widest disabled:opacity-40">
+             {recording ? 'Stop and transcribe' : 'Record locally'}
+           </button>
            <form onSubmit={onSend} className="relative group">
               <input 
                 autoFocus
@@ -732,9 +736,12 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [guestSessions, setGuestSessions] = useState<any[]>([]);
   const [voiceSettings, setVoiceSettings] = useState<any>({ persona: 'Ujo', pitch: 1.0, speechRate: 1.0 });
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
 
   const audioContextRef = React.useRef<AudioContext | null>(null);
   const ambientAudioRef = React.useRef<AudioContext | null>(null);
+  const recorderRef = React.useRef<MediaRecorder | null>(null);
 
   const getTTSContext = () => {
     if (!audioContextRef.current) {
@@ -944,15 +951,15 @@ export default function App() {
   const speakResponse = async (text: string) => {
     if (isGlobalMuted) return;
     try {
-      // 1. High-Fidelity Cloud Voice (SaaS Tier Simulation)
+      // The hub tries local speech first; cloud is available only by explicit server configuration.
       const persona = voiceSettings.persona || 'Ujo';
       const ttsResp = await fetch('/api/voice/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, persona })
       });
-      if (!ttsResp.ok) throw new Error(`Cloud speech unavailable (${ttsResp.status})`);
-      const { audio: base64Audio } = await ttsResp.json();
+      if (!ttsResp.ok) throw new Error(`Hub speech unavailable (${ttsResp.status})`);
+      const { audio: base64Audio, encoding = 'pcm_s16le', sampleRate = 24000 } = await ttsResp.json();
       if (base64Audio) {
          const binaryString = atob(base64Audio);
          const bytes = new Uint8Array(binaryString.length);
@@ -964,12 +971,14 @@ export default function App() {
          if (audioContext.state === 'suspended') {
            await audioContext.resume();
          }
-         const audioBuffer = audioContext.createBuffer(1, bytes.length / 2, 24000);
-         const channelData = audioBuffer.getChannelData(0);
-         const dataView = new DataView(bytes.buffer);
-         
-         for (let i = 0; i < bytes.length / 2; i++) {
-           channelData[i] = dataView.getInt16(i * 2, true) / 32768.0;
+         let audioBuffer: AudioBuffer;
+         if (encoding === 'wav') {
+           audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
+         } else {
+           audioBuffer = audioContext.createBuffer(1, bytes.length / 2, sampleRate);
+           const channelData = audioBuffer.getChannelData(0);
+           const dataView = new DataView(bytes.buffer);
+           for (let i = 0; i < bytes.length / 2; i++) channelData[i] = dataView.getInt16(i * 2, true) / 32768.0;
          }
          
          const source = audioContext.createBufferSource();
@@ -983,7 +992,7 @@ export default function App() {
          return;
       }
     } catch (e) {
-      console.warn("Cloud TTS failed, falling back to enhanced local engine:", e);
+      console.warn("Hub TTS failed, falling back to the device speech engine:", e);
     }
     
     // 2. Enhanced Local Fallback (Free Tier - Non-Robotic)
@@ -1029,10 +1038,9 @@ export default function App() {
     e.preventDefault();
     if (!voiceInput.trim()) return;
 
-    // Simulate voice confidence processing
-    const confidence = 85 + Math.random() * 14;
-    setVoiceConfidence(confidence);
-    setIsVoiceVerified(true);
+    // Text or speech-to-text is an input method, never biometric authentication.
+    setVoiceConfidence(0);
+    setIsVoiceVerified(false);
 
     try {
       const response = await fetch('/api/nlp-parse', {
@@ -1040,14 +1048,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           text: voiceInput, 
-          room: activeZone,
-          securityFlags: { voiceVerified: true, phonePresent: isPhonePresent }
+          room: activeZone
         })
       });
 
       const result = await response.json();
       setNlpResponse(result.response);
-      addTrustLog(`NLP: Command processed (${confidence.toFixed(0)}% confidence). ${result.response}`, result.success ? 'success' : 'info');
+      addTrustLog(`NLP: Command processed. ${result.response}`, result.success ? 'success' : 'info');
       
       if (result.vaultRequired) {
         setVaultAction(voiceInput);
@@ -1061,6 +1068,51 @@ export default function App() {
     } catch (e) {
       addTrustLog("Voice link handshake failed", "error");
       speakResponse("System link failed.");
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (recorderRef.current?.state === 'recording') {
+      recorderRef.current.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      addTrustLog('This client does not support microphone capture.', 'error');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+      const preferred = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, preferred ? { mimeType: preferred } : undefined);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+      recorder.onstop = async () => {
+        setRecording(false);
+        setTranscribing(true);
+        stream.getTracks().forEach(track => track.stop());
+        try {
+          const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+          const response = await fetch('/api/voice/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': blob.type.split(';')[0] },
+            body: blob
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Transcription failed');
+          setVoiceInput(result.text || '');
+          addTrustLog(`Local transcription completed${result.language ? ` (${result.language})` : ''}.`, 'success');
+        } catch (error) {
+          addTrustLog(error instanceof Error ? error.message : 'Local transcription failed.', 'error');
+        } finally {
+          setTranscribing(false);
+          recorderRef.current = null;
+        }
+      };
+      recorderRef.current = recorder;
+      recorder.start(1000);
+      setRecording(true);
+    } catch {
+      addTrustLog('Microphone permission was denied or unavailable.', 'error');
     }
   };
 
@@ -1080,7 +1132,7 @@ export default function App() {
   const startTraining = () => {
     setIsTraining(true);
     setTrainingStep(1);
-    speakResponse(`Voice biometrics enrollment initialized. Please read the three displayed sentences to extract your vocal MFCC signature.`);
+    speakResponse('Voice input calibration started. This adjusts microphone guidance only and is not identity verification.');
   };
 
   const nextTrainingStep = () => {
@@ -1089,7 +1141,7 @@ export default function App() {
     } else {
       setIsTraining(false);
       setTrainingStep(0);
-      speakResponse("Biometric voice print captured and hashed. Welcome to the household.");
+      speakResponse('Voice input calibration complete. No biometric credential was created.');
     }
   };
 
@@ -1336,21 +1388,8 @@ export default function App() {
       if (res.ok) {
         setShowVaultAuth(false);
         setVaultPin('');
-        speakResponse("Manual PIN override confirmed. Executing Vault protocol.");
-        
-        const nlpRes = await fetch('/api/nlp-parse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            text: vaultAction, 
-            room: activeZone,
-            securityFlags: { voiceVerified: true, phonePresent: true }
-          }),
-        });
-        const nlpData = await nlpRes.json();
-        speakResponse(nlpData.response);
-        setNlpResponse(nlpData.response);
-        setTimeout(() => setNlpResponse(null), 10000);
+        speakResponse("PIN confirmed. Use the dedicated access control to select the exact door and action.");
+        setNlpResponse("Authentication confirmed; natural-language execution remains disabled for locks and payments.");
       } else {
         setVaultError("Invalid Security PIN");
       }
@@ -1369,13 +1408,13 @@ export default function App() {
     if (step === 'qr') {
       await fetch('/api/system/onboarding/qr-handshake', { method: 'POST' });
       setOnboardingStep('voice');
-      speakResponse("Link confirmed. Welcome, Admin. Please read the calibration sentences displayed on your device.");
+      speakResponse('Setup step confirmed. You can now test local microphone transcription.');
     } else {
       await fetch('/api/system/onboarding/voice-calibrate', { method: 'POST' });
       setOnboardingStep('complete');
-      speakResponse("Setup complete. Ujo OS is now active and customized for your voice signature.");
+      speakResponse('Setup complete. Voice remains a convenience input and does not authorize secure actions.');
       setTimeout(() => setShowOnboarding(false), 2000);
-      addTrustLog("New SuperAdmin Biometric Signature Created", 'success');
+      addTrustLog('Voice input calibration completed; no biometric credential stored.', 'success');
     }
   };
 
@@ -1974,6 +2013,9 @@ export default function App() {
           setIsVoiceVerified(false);
         }}
         onSend={sendVoiceCommand}
+        onRecord={toggleRecording}
+        recording={recording}
+        transcribing={transcribing}
         input={voiceInput}
         setInput={setVoiceInput}
         activeZone={activeZone}

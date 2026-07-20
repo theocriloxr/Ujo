@@ -6,6 +6,6 @@ Before `docker compose up -d`, create a deployment `.env` from `.env.example`, r
 - `server.crt`: broker certificate whose SAN contains the hub hostname/IP
 - `server.key`: broker private key; restrict it to the deployment administrator
 
-Generate secrets with a cryptographically secure password manager or `openssl rand -hex 32`. Never reuse a node HMAC key. Start the standard hub and broker with `docker compose up -d`; include local AI with `docker compose --profile ai up -d`, then run `docker exec ujo-ollama ollama pull qwen3:4b` (or the model selected for the hub profile).
+Generate secrets with a cryptographically secure password manager or `openssl rand -hex 32`. Never reuse a node HMAC key. Start the standard hub and broker with `docker compose up -d`; include local AI and voice with `docker compose --profile ai --profile voice up -d`, then run `docker exec ujo-ollama ollama pull qwen3:4b` (or the model selected for the hub profile). Put a Piper `.onnx` model and matching `.onnx.json` file in `deployment/voices` before enabling voice.
 
 The container applies checked-in Prisma migrations and refuses weak/missing production secrets. It does not use destructive schema synchronization.

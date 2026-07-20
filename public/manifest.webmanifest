@@ -1,0 +1,14 @@
+{
+  "name": "Ujo Smart Home OS",
+  "short_name": "Ujo",
+  "description": "Privacy-first, offline-capable smart home control.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#facc15",
+  "orientation": "any",
+  "icons": [
+    { "src": "/ujo-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -51,9 +51,25 @@ export class AutomationEngine {
       } catch (error) {
         await this.prisma.automationRun.update({ where: { id: run.id }, data: { status: 'FAILED', result: error instanceof Error ? error.message : 'Automation failed.', completedAt: new Date() } });
       }
+      if (rule.mode === 'QUEUED') await this.drainQueue(rule.id, actions);
       results.push(run);
     }
     return results;
+  }
+
+  private async drainQueue(ruleId: string, actions: AutomationAction[]): Promise<void> {
+    while (true) {
+      const next = await this.prisma.automationRun.findFirst({ where: { ruleId, status: 'QUEUED' }, orderBy: { startedAt: 'asc' } });
+      if (!next) return;
+      await this.prisma.automationRun.update({ where: { id: next.id }, data: { status: 'RUNNING' } });
+      try {
+        const results: string[] = [];
+        for (const action of actions) results.push(await this.executeAction(ruleId, action));
+        await this.prisma.automationRun.update({ where: { id: next.id }, data: { status: 'COMPLETED', result: JSON.stringify(results), completedAt: new Date() } });
+      } catch (error) {
+        await this.prisma.automationRun.update({ where: { id: next.id }, data: { status: 'FAILED', result: error instanceof Error ? error.message : 'Automation failed.', completedAt: new Date() } });
+      }
+    }
   }
 
   private async executeAction(ruleId: string, action: AutomationAction): Promise<string> {

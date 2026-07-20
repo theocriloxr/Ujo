@@ -7,6 +7,7 @@ import { HardwareReplayGuard, parseNodeKeys, type HardwareEnvelope } from './har
 import { signEnvelope } from './hardwareProtocol.ts';
 import { assessMaintenance, assessWater } from './InfrastructureIntelligence.ts';
 import { planEnergySafety } from './EnergyOrchestrator.ts';
+import { AutomationEngine } from './AutomationEngine.ts';
 
 export interface HardwareBus {
   connected(): boolean;
@@ -21,6 +22,7 @@ const numberValue = (value: unknown, fallback = 0) => {
 
 export function setupMQTT(io: Server, prisma: PrismaClient) {
   const brain = new DecisionEngine(prisma);
+  const automations = new AutomationEngine(prisma);
   const brokerUrl = process.env.MQTT_BROKER || 'mqtt://127.0.0.1:1883';
   const nodeKeys = parseNodeKeys(process.env.UJO_NODE_KEYS_JSON);
   if (process.env.NODE_ENV !== 'production') {
@@ -215,6 +217,9 @@ export function setupMQTT(io: Server, prisma: PrismaClient) {
         }
       }
     }
+    await automations.handleEvent('SENSOR_THRESHOLD', data);
+    if (data.kind === 'presence') await automations.handleEvent('PRESENCE', { ...data, present: Boolean(data.presence ?? data.motion) });
+    if (data.kind === 'energy') await automations.handleEvent('POWER_SOURCE', { ...data, source: context.powerSource });
     if (data.voltage !== undefined) {
       await prisma.energyTelemetry.create({
         data: {

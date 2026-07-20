@@ -1,63 +1,36 @@
-# Ujo OS: Master Developer Guide
+# Ujo smart-home ecosystem
 
-Welcome to the internal documentation for the Ujo OS "JARVIS" Prototype. This guide explains the neurological architecture of the system and how to extend it.
+Ujo is a local-first smart-home control plane for Nigerian homes: authenticated web/PWA clients, signed ESP32 hardware nodes, Home Assistant interoperability, energy and water protection, food-storage intelligence, maintenance, automations, and an offline Ollama assistant. This repository is being hardened from a prototype; unfinished integrations fail explicitly instead of reporting simulated success.
 
-## 1. Project Structure
-```text
-/
-├── server.ts             # The Brain: Node.js/Express server & SQLite logic
-├── ujo_os_v2.db          # The Memory: Persistent SQLite database
-├── ha_bridge.ts          # The Peripheral: Logic for Home Assistant syncing
-├── index.html            # The Entry Point
-├── package.json          # The Blueprint: Dependency definitions
-└── src/
-    ├── App.tsx           # The Consciousness: Main UI and State logic
-    ├── index.css         # The Aesthetic: Tailwind CSS layers & Bento styling
-    └── main.tsx          # The Bootloader
+## Run locally
+
+Requirements: Node.js 22+, npm, and a supported SQLite build.
+
+```bash
+npm install
+copy .env.example .env
+npm run dev
 ```
 
-## 2. Local Startup Instructions
-1. **Repository Setup**: Ensure you have Node.js 20+ installed.
-2. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
-3. **Database Initialization**: The system automatically creates `ujo_os_v2.db` on the first run.
-4. **Launch Dev Server**:
-   ```bash
-   npm run dev
-   ```
-5. **Access UI**: Open `http://localhost:3000` in your browser.
+Replace every sample credential before setting `NODE_ENV=production`. `npm start` bootstraps the database and applies checked-in Prisma migrations. The UI is at `http://localhost:3000`; the health endpoint is `/health`.
 
-## 3. Logic Flow Walkthrough
+## Verify
 
-### Dynamic Load Shedding (The Grid Guardian)
-*   **Trigger**: When the user clicks "Inverter" in the UI, a POST request is sent to `/api/power-state`.
-*   **Execution**: Inside `server.ts`, the `StateManager` receives the request. It immediately queries the database for all devices where `load_type = 'Heavy'`.
-*   **Action**: It executes `UPDATE devices SET state = 'off' WHERE load_type = 'Heavy'`. This ensures that high-vampire loads are dropped before the inverter capsizes.
+```bash
+npm run check
+```
 
-### Duress Protocol (Silent Security)
-*   **Input**: The `Keypad` in `App.tsx` captures user input buffer.
-*   **Processing**: On submission, `/api/security/unlock` checks the PIN against two hardcoded values.
-*   **Duress Logic**: If `9999` is entered, the server returns a "Success" response so the UI looks normal (preventing the attacker from knowing an alarm was raised), but it internally flags `duress_active = 1` in the database.
+The test suite covers authentication primitives, command authorization, hardware signing/replay protection, energy shedding, water safety, food-estimate language, automations, database bootstrap, and local voice. Docker Compose and ESP32 firmware require Docker and PlatformIO respectively; do not treat source generation as a successful physical commissioning test.
 
-## 4. How to Modify: Add a New Device
-To add a new mock device (e.g., "Smart Curtains"):
-1.  **Database**: In `server.ts`, find the `Initial Seed` section. Add:
-    ```typescript
-    await db.run("INSERT INTO devices (id, name, type, state, status, power_usage, load_type) VALUES ('curtain_1', 'Balcony Curtains', 'motor', 'closed', 'online', 15, 'Essential')");
-    ```
-2.  **UI Icon**: In `App.tsx`, update the `getIcon()` function in the `DeviceCard` component:
-    ```typescript
-    case 'motor': return <Link size={14} />; // or any Lucide icon
-    ```
-3.  **API Logic**: Update the `toggleDevice` function in `App.tsx` to handle the new `id` prefix:
-    ```typescript
-    else if (id.startsWith('curtain')) nextState = currentState === 'open' ? 'closed' : 'open';
-    ```
+## Production architecture
 
-## 5. Deployment Hardware Requirements
-*   **Core**: Raspberry Pi 5 (8GB Recommended).
-*   **Storage**: NVMe SSD (faster SQLite writes) or High Endurance SD Card.
-*   **Zigbee**: Sonoff Zigbee 3.0 USB Dongle.
-*   **Voice**: ESP32-S3-BOX-3 distributed nodes.
+- `server.ts`: authenticated REST/Socket.IO API and orchestration boundary.
+- `prisma/`: local data model and versioned migrations.
+- `src/services/`: deterministic safety, energy, automation, food, MQTT and assistant policies.
+- `hardware/esp32-node/`: TLS MQTT/HMAC firmware profiles for energy, water, food environment, and presence.
+- `deployment/`: Mosquitto and optional local Piper speech service.
+- `ha_bridge.ts`: Home Assistant adapter; HA remains the preferred device-protocol integration layer.
+
+Sensitive actions are not delegated to a language model. Unlocking requires the access-control flow; protective hardware commands are allowlisted, signed, sequenced, expire, and are acknowledged. Vendor purchases and updates require real configured integrations and approval.
+
+See [DEPLOYMENT.md](DEPLOYMENT.md), [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md), and [hardware/esp32-node/README.md](hardware/esp32-node/README.md).

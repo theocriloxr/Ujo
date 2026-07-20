@@ -7,6 +7,16 @@ export interface ActionDecision {
   reason: string;
 }
 
+const SENSITIVE_NL_PATTERNS = [
+  /\b(unlock|unlatch|open)\b.{0,24}\b(door|gate|lock)\b/i,
+  /\b(door|gate|lock)\b.{0,24}\b(unlock|unlatch|open)\b/i,
+  /\b(pay|payment|transfer|purchase|buy)\b/i
+];
+
+export function isSensitiveNaturalLanguage(text: string): boolean {
+  return SENSITIVE_NL_PATTERNS.some(pattern => pattern.test(text));
+}
+
 export function evaluateProposedAction(action: ProposedAction): ActionDecision {
   if (action.action === 'query_state') return { decision: 'ALLOW', reason: 'Read-only home state query.' };
   if (action.action === 'create_automation') {

@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "ujo-smart-home",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "start": "node --experimental-strip-types scripts/bootstrap-db.ts && npx prisma migrate deploy && node --experimental-strip-types server.ts",
@@ -11,9 +11,15 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "check": "npm run lint && npm test && npm run build"
+    "check": "npm run lint && npm test && npm run build",
+    "mobile:sync": "npm run build && cap sync",
+    "mobile:android": "npm run mobile:sync && cap open android",
+    "mobile:ios": "npm run mobile:sync && cap open ios"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/ios": "^8.4.2",
     "@google/genai": "^1.51.0",
     "@matter/main": "^0.16.11",
     "@matter/nodejs": "^0.16.11",
@@ -39,11 +45,12 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
+    "sqlite3": "^6.0.1",
     "vite": "^6.2.3",
     "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.2",
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.14.0",

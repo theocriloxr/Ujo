@@ -1,17 +1,24 @@
 import cron from 'node-cron';
 import { PrismaClient } from '@prisma/client';
 import { assessMaintenance } from './InfrastructureIntelligence.ts';
+import { AutomationEngine } from './AutomationEngine.ts';
 
 export class ProactiveEngine {
   private readonly prisma: PrismaClient;
+  private readonly automations: AutomationEngine;
 
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
+    this.automations = new AutomationEngine(prisma);
   }
 
   init() {
     console.log('Proactive deterministic monitoring initialized.');
     cron.schedule('* * * * *', () => this.runEnergyAudit().catch(error => console.error('Energy audit failed:', error)));
+    cron.schedule('* * * * *', () => {
+      const now = new Date();
+      this.automations.handleEvent('SCHEDULE', { hour: now.getHours(), minute: now.getMinutes(), weekday: now.getDay() }).catch(error => console.error('Scheduled automation failed:', error));
+    });
     cron.schedule('*/5 * * * *', () => this.runHardwareHealthAudit().catch(error => console.error('Hardware audit failed:', error)));
     cron.schedule('15 * * * *', () => this.runMaintenanceAudit().catch(error => console.error('Maintenance audit failed:', error)));
     cron.schedule('0 3 * * *', () => this.runRetentionCleanup().catch(error => console.error('Retention cleanup failed:', error)));

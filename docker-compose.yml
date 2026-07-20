@@ -24,6 +24,10 @@ services:
       UJO_NODE_KEYS_JSON: ${UJO_NODE_KEYS_JSON:-{}}
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+      LOCAL_TTS_URL: ${LOCAL_TTS_URL:-http://local-tts:10200/synthesize}
+      LOCAL_TTS_VOICE: ${LOCAL_TTS_VOICE:-en_GB-alan-medium}
+      ALLOW_CLOUD_VOICE: ${ALLOW_CLOUD_VOICE:-false}
+      LOCAL_STT_URL: ${LOCAL_STT_URL:-http://local-stt:10300/transcribe}
       HA_URL: ${HA_URL:-http://host.docker.internal:8123}
       HA_TOKEN: ${HA_TOKEN:-}
     volumes:
@@ -70,7 +74,41 @@ services:
       timeout: 10s
       retries: 5
 
+  local-tts:
+    build: ./deployment/local-tts
+    container_name: ujo-local-tts
+    profiles: ["voice"]
+    restart: unless-stopped
+    environment:
+      PIPER_MODEL: /voices/${PIPER_MODEL_FILE:-en_GB-alan-medium.onnx}
+    volumes:
+      - ./deployment/voices:/voices:ro
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  local-stt:
+    build: ./deployment/local-stt
+    container_name: ujo-local-stt
+    profiles: ["voice"]
+    restart: unless-stopped
+    environment:
+      WHISPER_MODEL: ${LOCAL_STT_MODEL:-small.en}
+      WHISPER_DEVICE: ${LOCAL_STT_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${LOCAL_STT_COMPUTE_TYPE:-int8}
+      WHISPER_LOCAL_ONLY: ${LOCAL_STT_LOCAL_ONLY:-false}
+    volumes:
+      - whisper_models:/models
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
 volumes:
   ujo_data:
   mosquitto_data:
   ollama_data:
+  whisper_models:
