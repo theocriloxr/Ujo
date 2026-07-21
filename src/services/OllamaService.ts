@@ -29,7 +29,7 @@ export class OllamaService {
 
   constructor(
     baseUrl = process.env.OLLAMA_URL || 'http://127.0.0.1:11434',
-    model = process.env.OLLAMA_MODEL || modelForProfile(process.env.UJO_HUB_PROFILE)
+    model = process.env.OLLAMA_MODEL || 'ujo-assistant'
   ) {
     this.baseUrl = baseUrl;
     this.model = model;
@@ -44,6 +44,67 @@ export class OllamaService {
     } catch {
       return { available: false, model: this.model };
     }
+  }
+
+  async embed(input: string | string[]): Promise<number[][]> {
+    const values = Array.isArray(input) ? input : [input];
+    if (!values.length || values.length > 64 || values.some(value => !value.trim() || value.length > 8_000)) {
+      throw new Error('Embedding input must contain 1 to 64 non-empty strings of at most 8000 characters.');
+    }
+    const response = await fetch(`${this.baseUrl}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({ model: process.env.UJO_EMBED_MODEL || 'embeddinggemma', input: values })
+    });
+    if (!response.ok) throw new Error(`Ollama embedding request failed with status ${response.status}.`);
+    const body = await response.json() as { embeddings?: number[][] };
+    if (!Array.isArray(body.embeddings) || body.embeddings.length !== values.length) throw new Error('Ollama returned invalid embeddings.');
+    return body.embeddings;
+  }
+
+  async analyzeImage(imageBase64: string, prompt: string): Promise<{ summary: string; observations: string[]; confidence: number; safetyNotice: string }> {
+    if (process.env.UJO_ENABLE_VISION === 'false') throw new Error('Local vision is disabled.');
+    if (!imageBase64 || imageBase64.length > 3_000_000) throw new Error('Vision image is missing or too large.');
+    if (!prompt.trim() || prompt.length > 1_000) throw new Error('Vision prompt must be between 1 and 1000 characters.');
+    const response = await fetch(`${this.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({
+        model: process.env.UJO_VISION_MODEL || 'gemma3:4b',
+        stream: false,
+        format: {
+          type: 'object',
+          required: ['summary', 'observations', 'confidence', 'safetyNotice'],
+          properties: {
+            summary: { type: 'string' },
+            observations: { type: 'array', items: { type: 'string' } },
+            confidence: { type: 'number', minimum: 0, maximum: 1 },
+            safetyNotice: { type: 'string' }
+          }
+        },
+        options: { temperature: 0.1 },
+        messages: [{
+          role: 'user',
+          content: `${prompt}
+Describe visible evidence only. Do not identify a person, infer protected traits, declare food safe, or authorize a physical action.`,
+          images: [imageBase64]
+        }]
+      })
+    });
+    if (!response.ok) throw new Error(`Ollama vision request failed with status ${response.status}.`);
+    const body = await response.json() as { message?: { content?: string } };
+    const parsed = JSON.parse(body.message?.content || '{}') as { summary?: unknown; observations?: unknown; confidence?: unknown; safetyNotice?: unknown };
+    if (typeof parsed.summary !== 'string' || !Array.isArray(parsed.observations) || typeof parsed.confidence !== 'number' || typeof parsed.safetyNotice !== 'string') {
+      throw new Error('Ollama returned an invalid vision result.');
+    }
+    return {
+      summary: parsed.summary.slice(0, 2_000),
+      observations: parsed.observations.filter((item): item is string => typeof item === 'string').slice(0, 50),
+      confidence: Math.max(0, Math.min(1, parsed.confidence)),
+      safetyNotice: parsed.safetyNotice.slice(0, 1_000)
+    };
   }
 
   async plan(text: string, stateSummary: unknown): Promise<AssistantPlan> {

@@ -22,19 +22,29 @@ services:
       MQTT_PASSWORD: ${MQTT_PASSWORD:?required}
       MQTT_CA_PATH: /run/secrets/mqtt-ca.crt
       UJO_NODE_KEYS_JSON: ${UJO_NODE_KEYS_JSON:-{}}
+      ALLOW_LEGACY_MQTT: "false"
       OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
-      LOCAL_TTS_URL: ${LOCAL_TTS_URL:-http://local-tts:10200/synthesize}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-ujo-assistant}
+      UJO_HUB_PROFILE: ${UJO_HUB_PROFILE:-mini}
+      UJO_EMBED_MODEL: ${UJO_EMBED_MODEL:-embeddinggemma}
+      UJO_VISION_MODEL: ${UJO_VISION_MODEL:-gemma3:4b}
+      UJO_ENABLE_VISION: ${UJO_ENABLE_VISION:-true}
+      LOCAL_TTS_URL: http://local-tts:10200/synthesize
       LOCAL_TTS_VOICE: ${LOCAL_TTS_VOICE:-en_GB-alan-medium}
       ALLOW_CLOUD_VOICE: ${ALLOW_CLOUD_VOICE:-false}
-      LOCAL_STT_URL: ${LOCAL_STT_URL:-http://local-stt:10300/transcribe}
+      LOCAL_STT_URL: http://local-stt:10300/transcribe
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-small.en}
       HA_URL: ${HA_URL:-http://host.docker.internal:8123}
       HA_TOKEN: ${HA_TOKEN:-}
+      UJO_CLOUD_URL: ${UJO_CLOUD_URL:-}
+      UJO_ENABLE_SIMULATION: ${UJO_ENABLE_SIMULATION:-false}
+      UJO_ALLOW_MANUAL_POWER_SOURCE: ${UJO_ALLOW_MANUAL_POWER_SOURCE:-false}
     volumes:
       - ujo_data:/app/data
       - ./deployment/mosquitto/certs/ca.crt:/run/secrets/mqtt-ca.crt:ro
     depends_on:
-      - mosquitto
+      mosquitto:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     security_opt:
@@ -42,6 +52,12 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
 
   mosquitto:
     image: eclipse-mosquitto:2.0.22
@@ -51,11 +67,12 @@ services:
       MQTT_USERNAME: ${MQTT_USERNAME:?required}
       MQTT_PASSWORD: ${MQTT_PASSWORD:?required}
     command: >-
-      /bin/sh -c 'mosquitto_passwd -b -c /mosquitto/data/passwords "$${MQTT_USERNAME}" "$${MQTT_PASSWORD}" && exec mosquitto -c /mosquitto/config/mosquitto.conf'
+      /bin/sh -c 'touch /mosquitto/data/passwords && mosquitto_passwd -b /mosquitto/data/passwords "$${MQTT_USERNAME}" "$${MQTT_PASSWORD}" && exec mosquitto -c /mosquitto/config/mosquitto.conf'
     ports:
       - "8883:8883"
     volumes:
       - ./deployment/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./deployment/mosquitto/acl:/mosquitto/config/acl:ro
       - ./deployment/mosquitto/certs:/mosquitto/certs:ro
       - mosquitto_data:/mosquitto/data
     security_opt:
@@ -66,13 +83,37 @@ services:
     container_name: ujo-ollama
     profiles: ["ai"]
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
-      interval: 30s
+      interval: 15s
       timeout: 10s
-      retries: 5
+      retries: 20
+
+  ollama-init:
+    image: ollama/ollama:0.32.1
+    container_name: ujo-ollama-init
+    profiles: ["ai"]
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-ujo-assistant}
+      UJO_HUB_PROFILE: ${UJO_HUB_PROFILE:-mini}
+      UJO_ASSISTANT_BASE_MODEL: ${UJO_ASSISTANT_BASE_MODEL:-}
+      UJO_EMBED_MODEL: ${UJO_EMBED_MODEL:-embeddinggemma}
+      UJO_VISION_MODEL: ${UJO_VISION_MODEL:-}
+      UJO_ENABLE_VISION: ${UJO_ENABLE_VISION:-true}
+      UJO_OLLAMA_CONTEXT: ${UJO_OLLAMA_CONTEXT:-8192}
+    entrypoint: ["/bin/sh", "/bootstrap/install-models.sh"]
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./deployment/ollama-init:/bootstrap:ro
+    depends_on:
+      ollama:
+        condition: service_healthy
 
   local-tts:
     build: ./deployment/local-tts
@@ -99,6 +140,7 @@ services:
       WHISPER_DEVICE: ${LOCAL_STT_DEVICE:-cpu}
       WHISPER_COMPUTE_TYPE: ${LOCAL_STT_COMPUTE_TYPE:-int8}
       WHISPER_LOCAL_ONLY: ${LOCAL_STT_LOCAL_ONLY:-false}
+      UJO_WAKE_PHRASES: ${UJO_WAKE_PHRASES:-hey ujo,okay ujo}
     volumes:
       - whisper_models:/models
     security_opt:
@@ -106,6 +148,20 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    container_name: ujo-remote-tunnel
+    profiles: ["remote"]
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?required_for_remote_profile}
+    command: tunnel --no-autoupdate run
+    depends_on:
+      ujo-core:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   ujo_data:

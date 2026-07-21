@@ -1,0 +1,113 @@
+openapi: 3.1.0
+info:
+  title: Ujo Cloud Control Plane
+  version: 0.1.0
+  description: Tenant-isolated remote management API. Local hub remains final physical authority.
+servers:
+  - url: https://api.example.ujo/home/v1
+security:
+  - bearerAuth: []
+paths:
+  /homes:
+    get:
+      operationId: listHomes
+      responses:
+        '200': { description: Authorized homes }
+  /homes/{homeId}/hubs:
+    get:
+      operationId: listHubs
+      parameters:
+        - $ref: '#/components/parameters/HomeId'
+      responses:
+        '200': { description: Hub health without private local telemetry }
+  /homes/{homeId}/commands:
+    post:
+      operationId: requestRemoteCommand
+      description: Creates an expiring request; completion requires hub acknowledgement and reported state.
+      parameters:
+        - $ref: '#/components/parameters/HomeId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandRequest'
+      responses:
+        '202': { description: Requested, approval required, or queued }
+        '403': { description: Policy or role denied }
+        '409': { description: Stale state, conflicting request, or unbound capability }
+  /commands/{commandId}:
+    get:
+      operationId: getCommand
+      parameters:
+        - name: commandId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Full command lifecycle state }
+  /hubs/{hubId}/heartbeat:
+    post:
+      operationId: recordHubHeartbeat
+      security:
+        - mutualTls: []
+      parameters:
+        - name: hubId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '204': { description: Heartbeat accepted }
+  /hubs/{hubId}/commands/pull:
+    post:
+      operationId: pullHubCommands
+      security:
+        - mutualTls: []
+      parameters:
+        - name: hubId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200': { description: Short-lived commands for this authenticated hub only }
+  /commands/{commandId}/ack:
+    post:
+      operationId: acknowledgeCommand
+      security:
+        - mutualTls: []
+      parameters:
+        - name: commandId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Signed hub outcome accepted }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    mutualTls:
+      type: mutualTLS
+  parameters:
+    HomeId:
+      name: homeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    CommandRequest:
+      type: object
+      additionalProperties: false
+      required: [target, action, arguments, expiresInSeconds]
+      properties:
+        target: { type: string, minLength: 1, maxLength: 128 }
+        action: { type: string, minLength: 1, maxLength: 64 }
+        arguments: { type: object }
+        reason: { type: string, maxLength: 500 }
+        expiresInSeconds: { type: integer, minimum: 5, maximum: 300 }

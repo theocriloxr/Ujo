@@ -1,0 +1,40 @@
+substitutions:
+  name: ujo-voice-satellite
+  friendly_name: Ujo Voice Satellite
+
+# Use the maintained ESPHome hardware package instead of copying a large,
+# board-specific audio stack into Ujo. Pin the commit/tag in a release build.
+packages:
+  esphome.voice_assistant: github://esphome/wake-word-voice-assistants/esp32-s3-box-3/esp32-s3-box-3.yaml@main
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  min_version: 2026.4.0
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Recovery"
+    password: !secret recovery_ap_password
+
+captive_portal:
+
+# The packaged board configuration supplies microphone, speaker, local wake-word,
+# voice-assistant and UI components. Select Ujo's fully local Assist pipeline in
+# Home Assistant: local Whisper/faster-whisper STT, Ujo conversation agent, and
+# local Piper TTS. A custom wake word requires a separately trained microWakeWord
+# model; changing display/persona text alone does not train a wake-word model.

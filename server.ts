@@ -23,6 +23,11 @@ import { estimateFreshness } from './src/services/FoodIntelligence.ts';
 import { assessMaintenance } from './src/services/InfrastructureIntelligence.ts';
 import { validateAutomationDefinition } from './src/services/AutomationPolicy.ts';
 import { AutomationEngine } from './src/services/AutomationEngine.ts';
+import { DeviceControlService } from './src/services/DeviceControlService.ts';
+import { LocalAIRegistryService } from './src/services/LocalAIRegistryService.ts';
+import { HardwareHttpAuthenticator } from './src/services/hardwareHttpAuth.ts';
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 // --- CONFIGURATION ---
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
@@ -34,6 +39,8 @@ const STAFF_PIN = process.env.UJO_STAFF_PIN || '2468';
 const pinLimiter = new AttemptLimiter(5, 60_000);
 const loginLimiter = new AttemptLimiter(5, 15 * 60_000);
 const allowedOrigins = (process.env.APP_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean);
+const SIMULATION_ENABLED = process.env.UJO_ENABLE_SIMULATION === 'true' && process.env.NODE_ENV !== 'production';
+const ALLOW_MANUAL_POWER_SOURCE = process.env.UJO_ALLOW_MANUAL_POWER_SOURCE === 'true';
 
 // --- ENTERPRISE HUB SERVICES ---
 const prisma = new PrismaClient();
@@ -43,6 +50,8 @@ const localVoice = new LocalVoiceService();
 const localSpeech = new LocalSpeechService();
 const ollama = new OllamaService();
 const automationEngine = new AutomationEngine(prisma);
+const localAIRegistry = new LocalAIRegistryService();
+const hardwareHttpAuth = new HardwareHttpAuthenticator();
 
 const haBridge = new HABridge({
   url: process.env.HA_URL || 'http://localhost:8123',
@@ -50,9 +59,31 @@ const haBridge = new HABridge({
 });
 
 let io: Server;
+let deviceControl: DeviceControlService | null = null;
 
 function cookieValue(header: string | undefined, name: string): string | undefined {
   return header?.split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`))?.slice(name.length + 1);
+}
+
+async function purgeExpiredSnapshots(now = Date.now()): Promise<number> {
+  const retentionDays = Math.max(1, Math.min(3650, Number(process.env.SNAPSHOT_RETENTION_DAYS || 30)));
+  const cutoff = now - retentionDays * 86_400_000;
+  const root = path.resolve(process.env.UJO_SNAPSHOT_DIR || '/app/data/snapshots');
+  let deleted = 0;
+  try {
+    for (const entry of await fs.promises.readdir(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.jpg')) continue;
+      const fullPath = path.join(root, entry.name);
+      const stat = await fs.promises.stat(fullPath);
+      if (stat.mtimeMs < cutoff) {
+        await fs.promises.unlink(fullPath);
+        deleted++;
+      }
+    }
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') console.warn('[Snapshots] Retention cleanup failed:', error);
+  }
+  return deleted;
 }
 
 async function authenticateSessionToken(token: string | undefined) {
@@ -84,14 +115,18 @@ async function seedData() {
   const count = await prisma.device.count();
   if (count === 0) {
     await prisma.device.createMany({
-      data: [
-        { id: 'light_1', name: 'Living Room Light', type: 'light', state: 'off', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false },
-        { id: 'lock_1', name: 'Front Door Lock', type: 'lock', state: 'locked', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false },
-        { id: 'fridge_1', name: 'Kitchen Fridge', type: 'appliance', state: 'normal', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false, powerUsage: 85 },
-        { id: 'ac_1', name: 'Master Bedroom AC', type: 'climate', state: 'off', status: 'ONLINE', category: 'HEAVY', isSheddable: true, powerUsage: 1500 },
-        { id: 'pump_1', name: 'Borehole Pump', type: 'appliance', state: 'off', status: 'ONLINE', category: 'HEAVY', isSheddable: true, powerUsage: 1200 },
-        { id: 'gas_sensor', name: 'Kitchen Gas', type: 'sensor', state: '92%', status: 'ONLINE', category: 'ESSENTIAL', isSheddable: false }
-      ]
+      data: ([
+        { id: 'light_1', name: 'Living Room Light', type: 'light', state: 'off', status: 'UNKNOWN', category: 'ESSENTIAL', isSheddable: false },
+        { id: 'lock_1', name: 'Front Door Lock', type: 'lock', state: 'locked', status: 'UNKNOWN', category: 'ESSENTIAL', isSheddable: false },
+        { id: 'fridge_1', name: 'Kitchen Fridge', type: 'appliance', state: 'normal', status: 'UNKNOWN', category: 'ESSENTIAL', isSheddable: false, powerUsage: 85 },
+        { id: 'ac_1', name: 'Master Bedroom AC', type: 'climate', state: 'off', status: 'UNKNOWN', category: 'HEAVY', isSheddable: true, powerUsage: 1500 },
+        { id: 'pump_1', name: 'Borehole Pump', type: 'appliance', state: 'off', status: 'UNKNOWN', category: 'HEAVY', isSheddable: true, powerUsage: 1200 },
+        { id: 'gas_sensor', name: 'Kitchen Gas', type: 'sensor', state: 'unknown', status: 'UNKNOWN', category: 'ESSENTIAL', isSheddable: false }
+      ] as any[]).map(device => ({
+        ...device,
+        controlProvider: SIMULATION_ENABLED ? 'SIMULATION' : 'UNBOUND',
+        lastCommandStatus: 'IDLE'
+      }))
     });
   }
 
@@ -153,110 +188,68 @@ class StateManager {
         expiresAt: true
       }
     });
-    
-    // In a real InfluxDB environment, this would be a time-series query
-    const energy = {
-      grid: config?.powerSource === 'MAINS' ? 'Connected' : 'Failing',
-      source: config?.powerSource || 'MAINS',
-      voltage: config?.powerSource === 'MAINS' ? 228 : (config?.powerSource === 'INVERTER' ? 220 : 0),
-      status: config?.powerSource === 'MAINS' ? 'Stable' : 'Battery Optimal',
-      battery: 88,
-      solar: 1.2,
-      forecast: 'Overcast Tomorrow'
+    const latestPower = await prisma.powerSnapshot.findFirst({ orderBy: { timestamp: 'desc' } });
+    const voice = await prisma.voiceSettings.upsert({ where: { id: 'GLOBAL' }, update: {}, create: { id: 'GLOBAL' } });
+    const energy = latestPower ? {
+      grid: latestPower.source === 'MAINS' ? 'Connected' : 'Unavailable',
+      source: latestPower.source,
+      voltage: latestPower.voltage,
+      status: latestPower.voltage >= 180 && latestPower.voltage <= 260 ? 'Stable' : 'Unsafe',
+      battery: latestPower.batteryPct,
+      solar: latestPower.solarWatts,
+      totalWatts: latestPower.totalWatts,
+      measuredAt: latestPower.timestamp,
+      forecast: null
+    } : {
+      grid: 'Unknown', source: config?.powerSource || 'UNKNOWN', voltage: null, status: 'No telemetry',
+      battery: null, solar: null, totalWatts: null, measuredAt: null, forecast: null
     };
 
-    return { 
-      devices, 
-      mode: config?.mode, 
+    return {
+      devices,
+      mode: config?.mode,
       location: config?.location || 'Home',
-      updateAvailable: false, // Mocked
-      subscriptionActive: true, // Mocked
-      powerSource: config?.powerSource,
+      updateAvailable: false,
+      subscriptionActive: false,
+      subscriptionStatus: 'NOT_CONFIGURED',
+      powerSource: latestPower?.source || config?.powerSource,
       duressActive: config?.mode === 'DURESS_ACTIVE',
-      assistantName: 'Ujo',
-      alerts, 
-      energy, 
-      accessProfiles: profiles 
+      assistantName: voice.persona,
+      alerts: alerts.map(alert => ({
+        ...alert,
+        title: alert.message.includes(':') ? alert.message.split(':', 1)[0] : alert.type,
+        message: alert.message.includes(':') ? alert.message.slice(alert.message.indexOf(':') + 1).trim() : alert.message
+      })),
+      energy,
+      accessProfiles: profiles,
+      capabilities: {
+        simulation: SIMULATION_ENABLED,
+        manualPowerSource: ALLOW_MANUAL_POWER_SOURCE,
+        homeAssistant: haBridge.isConfigured(),
+        localVoice: true,
+        hardwareApprovalRequired: true
+      }
     };
   }
-
 
   // --- SPATIAL LOCATOR: Find My Phone ---
   async findPhone() {
-    // Check if phone is "online" (mocked check)
-    const isPhoneOnline = Math.random() > 0.3; // 70% chance online for demo
-
-    if (isPhoneOnline) {
-      const triangulation = [
-        { room: 'Living Room', rssi: -65, status: 'Weak' },
-        { room: 'Kitchen', rssi: -42, status: 'Strong' },
-        { room: 'Bedroom', rssi: -71, status: 'Very Weak' },
-      ];
-      
-      const strongest = triangulation.sort((a, b) => b.rssi - a.rssi)[0];
-      
-      await this.triggerAnomaly(
-        'Spatial Locator Success',
-        `Phone heartbeat detected. Strongest signal in ${strongest.room} (-42dBm). Sonar activated.`,
-        'info',
-        'system'
-      );
-      
-      if (io) {
-        io.emit('phone_sonar_active', { room: strongest.room });
-      }
-      return { success: true, room: strongest.room, battery: 88, status: 'ONLINE' };
-    } else {
-      // Scenario A/B: Dead or Out of House
-      const isDeadInside = Math.random() > 0.5;
-      const response = isDeadInside 
-        ? { 
-            success: true, 
-            status: 'DEAD_INSIDE', 
-            lastKnownRoom: 'Living Room', 
-            lastBattery: 1, 
-            timestamp: '16:12',
-            message: "Phone battery dropped to 1% at 4:12 PM. Its last known location was near the Living Room couch." 
-          }
-        : { 
-            success: true, 
-            status: 'OFF_SITE', 
-            lastGeofenceExit: '08:45',
-            message: "Phone is not within the home network. It was last registered leaving the geofence at 8:45 AM." 
-          };
-
-      await this.triggerAnomaly(
-        'Spatial Locator Fallback',
-        response.message,
-        'medium',
-        'system'
-      );
-
-      return response;
+    if (!SIMULATION_ENABLED) {
+      return {
+        success: false,
+        status: 'NOT_CONFIGURED',
+        message: 'Phone location requires an enrolled mobile device publishing signed local presence/RSSI observations.'
+      };
     }
+    return { success: true, status: 'SIMULATION', room: 'Kitchen', message: 'Simulation-only location result.' };
   }
 
   // --- LAZARUS REBOOT ---
-  async lazarusReboot(deviceId: string) {
-    const device = await prisma.device.findUnique({ where: { id: deviceId } });
-    if (!device) return { success: false, message: 'Device not found' };
-
-    // Simulate power cycle
-    await prisma.device.update({ where: { id: deviceId }, data: { status: 'REBOOTING' } });
+  async lazarusReboot(deviceId: string, actor = 'owner') {
+    if (!deviceControl) throw new Error('Device control service is not ready.');
+    const result = await deviceControl.requestReboot(deviceId, actor);
     await this.broadcastUpdate();
-
-    setTimeout(async () => {
-      await prisma.device.update({ where: { id: deviceId }, data: { status: 'ONLINE' } });
-      await this.triggerAnomaly(
-        'Lazarus Self-Heal',
-        `Device ${device.name} was unresponsive. Autonomous power-cycle (3s) successful. Re-synced to BLE Mesh.`,
-        'low',
-        'system'
-      );
-      await this.broadcastUpdate();
-    }, 3000);
-
-    return { success: true };
+    return { success: true, ...result };
   }
 
   async broadcastUpdate() {
@@ -265,13 +258,11 @@ class StateManager {
       io.emit('state_update', data);
     }
   }
-
-  async updateDevice(id: string, state: string) {
-    await prisma.device.update({
-      where: { id },
-      data: { state }
-    });
+  async updateDevice(id: string, state: string, actor = 'authenticated-user', reason = 'Authenticated control request') {
+    if (!deviceControl) throw new Error('Device control service is not ready.');
+    const result = await deviceControl.control(id, state, actor, reason);
     await this.broadcastUpdate();
+    return result;
   }
 
   async setMode(mode: string) {
@@ -281,31 +272,30 @@ class StateManager {
     });
     await this.broadcastUpdate();
   }
-
   // --- GRID GUARDIAN: Load Shedding Logic ---
-  async setPowerState(source: string) {
-    const config = await prisma.systemConfig.update({
-      where: { id: 'GLOBAL' },
-      data: { powerSource: source }
-    });
-    
+  async setPowerState(source: string, actor = 'power-telemetry') {
+    if (!['MAINS', 'INVERTER', 'GENERATOR', 'SOLAR'].includes(source)) throw new Error('Invalid power source.');
+    const config = await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { powerSource: source } });
+    const actions: Array<{ deviceId: string; status: string; error?: string }> = [];
     if (source === 'INVERTER' && config.autoShedding) {
-      // Automatic Load Shedding: Only kill sheddable heavies
-      await prisma.device.updateMany({
-        where: { 
-          category: 'HEAVY',
-          isSheddable: true 
-        },
-        data: { state: 'OFF' }
-      });
+      const devices = await prisma.device.findMany({ where: { category: 'HEAVY', isSheddable: true } });
+      for (const device of devices) {
+        try {
+          const result = await this.updateDevice(device.id, 'off', actor, 'Deterministic load-shedding policy');
+          actions.push({ deviceId: device.id, status: result.status });
+        } catch (error) {
+          actions.push({ deviceId: device.id, status: 'FAILED', error: error instanceof Error ? error.message : 'Control failed' });
+        }
+      }
       await this.triggerAnomaly(
-        'Load Shedding Active',
-        'Grid power lost. Switched to Inverter. Non-essential heavy appliances shut down autonomously.',
-        'medium',
+        'Load Shedding Requested',
+        `Backup power detected. ${actions.filter(item => item.status !== 'FAILED').length} control actions accepted; ${actions.filter(item => item.status === 'FAILED').length} need attention.`,
+        actions.some(item => item.status === 'FAILED') ? 'HIGH' : 'MEDIUM',
         'ENERGY'
       );
     }
     await this.broadcastUpdate();
+    return { source, actions };
   }
 
   // --- SECURITY LOGGING ---
@@ -333,14 +323,18 @@ class StateManager {
     const profile = profiles.find(candidate => verifyPin(pin, candidate.pinHash));
 
     if (profile?.role === 'OWNER') {
-      await this.updateDevice('lock_1', 'unlocked');
+      if (!deviceControl) throw new Error('Device control service is not ready.');
+      const command = await deviceControl.controlAccess('lock_1', 'unlocked', profile.id, 'Validated owner PIN access request');
+      await this.broadcastUpdate();
       await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { mode: 'STANDARD' } });
-      await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'SUCCESS', { type: 'NORMAL' });
-      return { success: true, message: 'Welcome. Door unlocked.' };
+      await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'SUCCESS', { type: 'NORMAL', commandStatus: command.status });
+      return { success: true, status: command.status, message: command.status === 'COMPLETED' ? 'Welcome. Door unlocked.' : 'Identity verified. Unlock command accepted; waiting for the lock to report its state.' };
     } 
     
     if (profile?.role === 'DURESS') {
-      await this.updateDevice('lock_1', 'unlocked');
+      if (!deviceControl) throw new Error('Device control service is not ready.');
+      const command = await deviceControl.controlAccess('lock_1', 'unlocked', profile.id, 'Validated duress PIN access request');
+      await this.broadcastUpdate();
       await prisma.systemConfig.update({ where: { id: 'GLOBAL' }, data: { mode: 'DURESS_ACTIVE' } });
       await this.triggerAnomaly(
         'Silent Duress Alert',
@@ -348,8 +342,8 @@ class StateManager {
         'CRITICAL',
         'SECURITY'
       );
-      await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'SUCCESS', { type: 'DURESS' });
-      return { success: true, message: 'Welcome. Door unlocked.' };
+      await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'SUCCESS', { type: 'DURESS', commandStatus: command.status });
+      return { success: true, status: command.status, message: command.status === 'COMPLETED' ? 'Welcome. Door unlocked.' : 'Welcome. Access request accepted.' };
     }
 
     await this.logSecurityEvent('PIN_ATTEMPT', 'Physical Keypad', 'FAILURE', { pin_entered: '****' });
@@ -409,9 +403,11 @@ class StateManager {
     const isTimeMatch = currentTime >= start_time && currentTime <= end_time;
 
     if (isDayMatch && isTimeMatch) {
-      await this.updateDevice('lock_1', 'unlocked');
-      await this.logSecurityEvent('STAFF_AUTH', staffId, 'SUCCESS');
-      return { allowed: true, name: profile.name };
+      if (!deviceControl) throw new Error('Device control service is not ready.');
+      const command = await deviceControl.controlAccess('lock_1', 'unlocked', profile.id, 'Validated scheduled staff access request');
+      await this.broadcastUpdate();
+      await this.logSecurityEvent('STAFF_AUTH', staffId, 'SUCCESS', { commandStatus: command.status });
+      return { allowed: true, name: profile.name, status: command.status };
     }
 
     return { 
@@ -514,12 +510,69 @@ async function startServer() {
 
   // Initialize MQTT Bridge & Virtual House Simulation
   const hardwareBus = setupMQTT(io, prisma);
-  if (process.env.NODE_ENV !== 'production') {
+  deviceControl = new DeviceControlService(prisma, haBridge, hardwareBus, SIMULATION_ENABLED);
+  if (SIMULATION_ENABLED) {
     console.log('🛠️  DEV MODE: Auto-starting Virtual House Simulator...');
     startSimulation();
   }
 
-  await haBridge.connect();
+  let haSyncInProgress = false;
+  const syncHomeAssistantDevices = async () => {
+    if (!haBridge.isConfigured() || haSyncInProgress) return 0;
+    haSyncInProgress = true;
+    try {
+      const haDevices = await haBridge.syncState();
+      for (const dev of haDevices) {
+        const type = ['light', 'switch', 'fan', 'climate', 'lock', 'cover'].includes(dev.domain)
+          ? dev.domain
+          : ['sensor', 'binary_sensor'].includes(dev.domain) ? 'sensor' : 'ha_linked';
+        const unavailable = ['unavailable', 'unknown'].includes(dev.state.toLowerCase());
+        await prisma.device.upsert({
+          where: { id: dev.id },
+          update: {
+            name: dev.name,
+            type,
+            state: dev.state,
+            status: unavailable ? 'OFFLINE' : 'ONLINE',
+            controlProvider: 'HOME_ASSISTANT',
+            controlTarget: dev.id,
+            lastReportedAt: dev.lastChanged ? new Date(dev.lastChanged) : new Date(),
+            lastCommandStatus: unavailable ? 'FAILED' : 'COMPLETED',
+            desiredState: null,
+            lastCommandError: unavailable ? 'Home Assistant reports the entity as unavailable.' : null
+          } as any,
+          create: {
+            id: dev.id,
+            name: dev.name,
+            type,
+            state: dev.state,
+            status: unavailable ? 'OFFLINE' : 'ONLINE',
+            controlProvider: 'HOME_ASSISTANT',
+            controlTarget: dev.id,
+            lastReportedAt: dev.lastChanged ? new Date(dev.lastChanged) : new Date(),
+            lastCommandStatus: unavailable ? 'FAILED' : 'COMPLETED',
+            lastCommandError: unavailable ? 'Home Assistant reports the entity as unavailable.' : null
+          } as any
+        });
+      }
+      await stateManager.broadcastUpdate();
+      return haDevices.length;
+    } finally {
+      haSyncInProgress = false;
+    }
+  };
+
+  if (haBridge.isConfigured()) {
+    try {
+      await haBridge.connect();
+      await syncHomeAssistantDevices();
+    } catch (error) {
+      console.warn('[HA] Bridge unavailable at startup:', error);
+    }
+    setInterval(() => {
+      void syncHomeAssistantDevices().catch(error => console.warn('[HA] State sync failed:', error));
+    }, 15_000).unref();
+  }
 
   io.use(async (socket, next) => {
     try {
@@ -540,6 +593,14 @@ async function startServer() {
     socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
   });
 
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(self)');
+    next();
+  });
   app.use(cors({
     origin(origin, callback) {
       if (!origin || allowedOrigins.includes(origin) || (allowedOrigins.length === 0 && process.env.NODE_ENV !== 'production')) {
@@ -590,7 +651,8 @@ async function startServer() {
         if (!['MAINS', 'INVERTER', 'GENERATOR', 'SOLAR'].includes(source)) {
           return res.status(400).json({ status: 'error', error: 'Invalid power source.' });
         }
-        await stateManager.setPowerState(source);
+        if (!ALLOW_MANUAL_POWER_SOURCE && !SIMULATION_ENABLED) return res.status(403).json({ status: 'error', error: 'Manual power-source mutation is disabled; use signed energy telemetry.' });
+        await stateManager.setPowerState(source, 'jarvis-bridge');
         return res.json({ status: 'success', output: `Power source set to ${source}` });
       }
       if (action === 'device_control') {
@@ -603,13 +665,39 @@ async function startServer() {
         if (device.type === 'lock') {
           return res.status(403).json({ status: 'error', error: 'Locks require the dedicated authenticated security flow.' });
         }
-        await stateManager.updateDevice(id, state);
-        return res.json({ status: 'success', output: `${device.name} set to ${state}` });
+        const result = await stateManager.updateDevice(id, state, 'jarvis-bridge', 'Authenticated MARK-XXXIX bridge request');
+        return res.status(result.status === 'COMPLETED' ? 200 : 202).json({ status: 'success', output: result.message, result });
       }
     } catch (error) {
       console.error('Bridge execution failed:', error);
       return res.status(500).json({ status: 'error', error: 'Bridge execution failed.' });
     }
+  });
+
+  // Signed machine-to-machine camera ingestion. This route is intentionally outside
+  // user-session middleware; every request uses a per-node secret, timestamp and replay counter.
+  app.post('/hardware/v1/camera/:nodeId', express.raw({ type: ['image/jpeg', 'image/jpg'], limit: '2mb' }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length < 100) return res.status(400).json({ error: 'JPEG body is required.' });
+    const nodeId = req.params.nodeId;
+    const sequence = Number(req.headers['x-ujo-sequence']);
+    const timestamp = Number(req.headers['x-ujo-timestamp']);
+    const signature = String(req.headers['x-ujo-signature'] || '');
+    const existingNode = await prisma.hardwareNode.findUnique({ where: { id: nodeId } });
+    if (existingNode && sequence <= existingNode.lastSequence) return res.status(409).json({ error: 'Camera request rejected: replayed-request' });
+    const verified = hardwareHttpAuth.verify({ nodeId, sequence, timestamp, signature }, req.body);
+    if (!verified.valid) return res.status(401).json({ error: `Camera request rejected: ${verified.reason}` });
+    const snapshotRoot = path.resolve(process.env.UJO_SNAPSHOT_DIR || '/app/data/snapshots');
+    fs.mkdirSync(snapshotRoot, { recursive: true, mode: 0o700 });
+    const filename = `${nodeId}-${timestamp}-${sequence}-${verified.bodyHash?.slice(0, 12)}.jpg`;
+    const destination = path.join(snapshotRoot, filename);
+    await fs.promises.writeFile(destination, req.body, { mode: 0o600 });
+    await prisma.hardwareNode.upsert({
+      where: { id: nodeId },
+      update: { status: 'ONLINE', lastSequence: sequence, lastSeenAt: new Date(timestamp * 1000) },
+      create: { id: nodeId, kind: 'camera', status: 'ONLINE', provisioned: true, lastSequence: sequence, lastSeenAt: new Date(timestamp * 1000) }
+    });
+    await prisma.sensorTelemetry.create({ data: { nodeId, kind: 'camera-snapshot', payload: JSON.stringify({ filename, sha256: createHash('sha256').update(req.body).digest('hex'), bytes: req.body.length }), timestamp: new Date(timestamp * 1000) } });
+    res.status(201).json({ accepted: true, filename, authorization: false, retentionDays: Number(process.env.SNAPSHOT_RETENTION_DAYS || 30) });
   });
 
   app.post('/api/auth/login', async (req, res) => {
@@ -668,9 +756,92 @@ async function startServer() {
       const auth = await authenticateSessionToken(bearer || cookieValue(req.headers.cookie, 'ujo_session'));
       if (!auth) return res.status(401).json({ error: 'Authentication required.' });
       res.locals.user = { id: auth.user.id, role: auth.user.role };
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && auth.user.role !== 'OWNER') {
+        return res.status(403).json({ error: 'Owner role is required for state-changing operations.' });
+      }
       next();
     } catch {
       res.status(401).json({ error: 'Authentication failed.' });
+    }
+  });
+
+  app.get('/api/ai/status', async (_req, res) => {
+    const status = await localAIRegistry.status();
+    res.status(status.ready ? 200 : 503).json(status);
+  });
+
+  app.post('/api/ai/embeddings', async (req, res) => {
+    try {
+      const input = req.body?.input;
+      const embeddings = await ollama.embed(input);
+      res.json({ model: process.env.UJO_EMBED_MODEL || 'embeddinggemma', embeddings, local: true, authorization: false });
+    } catch (error) {
+      res.status(422).json({ error: error instanceof Error ? error.message : 'Embedding failed.' });
+    }
+  });
+
+  app.post('/api/ai/vision/analyze', async (req, res) => {
+    try {
+      const image = typeof req.body?.imageBase64 === 'string' ? req.body.imageBase64.replace(/^data:image\/[^;]+;base64,/, '') : '';
+      const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt : 'Describe visible household or inventory conditions.';
+      const result = await ollama.analyzeImage(image, prompt);
+      res.json({ ...result, model: process.env.UJO_VISION_MODEL || 'gemma3:4b', local: true, authorization: false, retained: false });
+    } catch (error) {
+      res.status(422).json({ error: error instanceof Error ? error.message : 'Vision analysis failed.' });
+    }
+  });
+
+  app.get('/api/capabilities', async (_req, res) => {
+    const ha = await haBridge.getStatus();
+    res.json({
+      simulation: SIMULATION_ENABLED,
+      manualPowerSource: ALLOW_MANUAL_POWER_SOURCE,
+      homeAssistant: ha,
+      mqttConnected: hardwareBus.connected(),
+      controlPolicy: 'FAIL_CLOSED',
+      accessControl: 'DEDICATED_AUTHENTICATED_FLOW',
+      cloudControlPlane: process.env.UJO_CLOUD_URL ? 'CONFIGURED' : 'NOT_CONFIGURED'
+    });
+  });
+
+  app.post('/api/mobile/context', async (req, res) => {
+    const { connected, connectionType, activity, driving, batteryLevel, observedAt } = req.body ?? {};
+    const allowedConnectionTypes = new Set(['wifi', 'cellular', 'none', 'unknown']);
+    const sanitized = {
+      connected: typeof connected === 'boolean' ? connected : undefined,
+      connectionType: allowedConnectionTypes.has(String(connectionType)) ? String(connectionType) : 'unknown',
+      activity: typeof activity === 'string' ? activity.slice(0, 32) : undefined,
+      driving: typeof driving === 'boolean' ? driving : undefined,
+      batteryLevel: Number.isFinite(Number(batteryLevel)) ? Math.max(0, Math.min(1, Number(batteryLevel))) : undefined,
+      observedAt: typeof observedAt === 'string' && !Number.isNaN(Date.parse(observedAt)) ? observedAt : new Date().toISOString()
+    };
+    await prisma.auditLog.create({
+      data: { action: 'MOBILE_CONTEXT_OBSERVED', actor: res.locals.user.id, meta: JSON.stringify(sanitized) }
+    });
+    res.status(202).json({ accepted: true, authorization: false });
+  });
+
+  app.post('/api/devices/:id/bind', async (req, res) => {
+    const { pin, provider, target } = req.body ?? {};
+    if (typeof pin !== 'string' || !(await stateManager.verifyOwnerPin(pin))) return res.status(403).json({ error: 'Owner PIN required.' });
+    if (!deviceControl) return res.status(503).json({ error: 'Device control service unavailable.' });
+    try {
+      const device = await deviceControl.bind(req.params.id, provider, target);
+      await stateManager.logSecurityEvent('DEVICE_BINDING_CHANGED', res.locals.user.id, 'SUCCESS', { deviceId: req.params.id, provider, target });
+      res.json(device);
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : 'Binding failed.' });
+    }
+  });
+
+  app.post('/api/devices/:id/control', async (req, res) => {
+    const { state, reason } = req.body ?? {};
+    if (typeof state !== 'string') return res.status(400).json({ error: 'State is required.' });
+    try {
+      const result = await stateManager.updateDevice(req.params.id, state, res.locals.user.id, typeof reason === 'string' ? reason : 'Dashboard control request');
+      res.status(result.status === 'COMPLETED' ? 200 : 202).json(result);
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : 'Control failed.' });
     }
   });
 
@@ -698,6 +869,7 @@ async function startServer() {
 
   // Trigger Mock HITL Anomaly
   app.post('/api/anomaly', async (req, res) => {
+    if (!SIMULATION_ENABLED) return res.status(404).json({ error: 'Simulation is disabled.' });
     const id = await stateManager.triggerAnomaly(
       'Fridge Power Spike',
       'Unusual power draw detected in Kitchen Fridge. Potential compressor failure. Shut down appliance?',
@@ -716,8 +888,14 @@ async function startServer() {
   // Toggle Device State (Helper for Phase 2)
   app.post('/api/device/toggle', async (req, res) => {
     const { id, state } = req.body;
-    await stateManager.updateDevice(id, state);
-    res.json({ success: true });
+    if (typeof id !== 'string' || typeof state !== 'string') return res.status(400).json({ error: 'Device id and state are required.' });
+    try {
+      const result = await stateManager.updateDevice(id, state, res.locals.user.id, 'Legacy dashboard control route');
+      res.setHeader('Deprecation', 'true');
+      res.status(result.status === 'COMPLETED' ? 200 : 202).json(result);
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : 'Control failed.' });
+    }
   });
 
   app.post('/api/intercom/translate', async (req, res) => {
@@ -770,7 +948,7 @@ async function startServer() {
     if (typeof kind !== 'string' || typeof room !== 'string' || !['STANDARD', 'CRITICAL', 'ACCESS'].includes(safetyClass)) {
       return res.status(400).json({ error: 'Valid kind, room, and safety class are required.' });
     }
-    const supportedActions = ['set_relay'];
+    const supportedActions = ['set_relay', 'reboot'];
     if (!Array.isArray(allowedActions) || allowedActions.some(action => !supportedActions.includes(action))) {
       return res.status(400).json({ error: 'One or more hardware actions are unsupported.' });
     }
@@ -806,7 +984,7 @@ async function startServer() {
         nodeId,
         action,
         value: value === undefined ? null : String(value),
-        requestedBy: 'dashboard',
+        requestedBy: res.locals.user.id,
         reason: reason.trim().slice(0, 500),
         expiresAt: new Date(Date.now() + 5 * 60_000)
       }
@@ -843,11 +1021,15 @@ async function startServer() {
       if (!hardwareBus.connected()) throw new Error('Hardware bus is offline.');
       await hardwareBus.sendCommand(id, command.nodeId, command.action, command.value ?? undefined);
       const sent = await prisma.hardwareCommand.update({ where: { id }, data: { status: 'SENT' } });
-      await stateManager.logSecurityEvent('HARDWARE_COMMAND_APPROVAL', 'Owner', 'SUCCESS', { commandId: id, nodeId: command.nodeId });
+      await (prisma.device as any).updateMany({ where: { controlProvider: 'MQTT', controlTarget: command.nodeId }, data: { lastCommandStatus: 'SENT', lastCommandError: null } });
+      await stateManager.broadcastUpdate();
+      await stateManager.logSecurityEvent('HARDWARE_COMMAND_APPROVAL', res.locals.user.id, 'SUCCESS', { commandId: id, nodeId: command.nodeId });
       res.json(sent);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Command delivery failed.';
       await prisma.hardwareCommand.update({ where: { id }, data: { status: 'PENDING', approvedAt: null, error: message } });
+      await (prisma.device as any).updateMany({ where: { controlProvider: 'MQTT', controlTarget: command.nodeId }, data: { lastCommandStatus: 'PENDING_APPROVAL', lastCommandError: message } });
+      await stateManager.broadcastUpdate();
       res.status(503).json({ error: message });
     }
   });
@@ -1230,15 +1412,17 @@ async function startServer() {
     res.json(result);
   });
 
-  // Location Switcher (Mock GPS)
+  // Explicit user presence context. Native mobile geofencing will replace this manual input.
   app.post('/api/location', async (req, res) => {
     const { location } = req.body;
+    if (!['Home', 'Away'].includes(location)) return res.status(400).json({ error: 'Location must be Home or Away.' });
     await stateManager.setLocation(location);
     res.json({ success: true, location });
   });
 
   // Motion Detection Trigger (Fly vs Human Logic)
   app.post('/api/motion', async (req, res) => {
+    if (!SIMULATION_ENABLED) return res.status(404).json({ error: 'Simulation is disabled; motion must arrive as signed sensor telemetry.' });
     const { room = 'Living Room' } = req.body ?? {};
     await stateManager.simulateMotion(room);
     const data = await stateManager.getStates();
@@ -1273,7 +1457,7 @@ async function startServer() {
     const result = await stateManager.checkStaffAccess(id, pin);
     if (result.allowed) {
       pinLimiter.reset(attemptKey);
-      res.json({ success: true, message: `Access granted for ${result.name}. Door unlocked.` });
+      res.status(result.status === 'COMPLETED' ? 200 : 202).json({ success: true, message: result.status === 'COMPLETED' ? `Access granted for ${result.name}. Door unlocked.` : `Access granted for ${result.name}. Unlock command is awaiting reported state.`, status: result.status });
     } else {
       const alertId = await stateManager.triggerAnomaly(
         'Unauthorized Access',
@@ -1287,6 +1471,7 @@ async function startServer() {
 
   // Health / Sleep Monitoring Simulate
   app.post('/api/health/co2-trigger', async (req, res) => {
+    if (!SIMULATION_ENABLED) return res.status(404).json({ error: 'Simulation is disabled; air quality must arrive as signed telemetry.' });
     const id = await stateManager.triggerAnomaly(
       'Air Quality Warning',
       'CO2 levels in Master Bedroom have spiked to 1200ppm. Activating AC fan to cycle fresh air.',
@@ -1304,22 +1489,14 @@ async function startServer() {
   });
 
   // HA Sync
-  app.post('/api/ha/sync', async (req, res) => {
-    const haDevices = await haBridge.syncState();
-    for (const dev of haDevices) {
-      await prisma.device.upsert({
-        where: { id: dev.id },
-        update: { state: dev.state },
-        create: { 
-          id: dev.id, 
-          name: dev.name, 
-          type: 'ha_linked', 
-          state: dev.state, 
-          status: 'ONLINE' 
-        }
-      });
+  app.post('/api/ha/sync', async (_req, res) => {
+    if (!haBridge.isConfigured()) return res.status(409).json({ error: 'Home Assistant is not configured.' });
+    try {
+      const synced = await syncHomeAssistantDevices();
+      res.json({ success: true, synced });
+    } catch (error) {
+      res.status(503).json({ error: error instanceof Error ? error.message : 'Home Assistant sync failed.' });
     }
-    res.json({ success: true, synced: haDevices.length });
   });
 
   // OVER-THE-AIR (OTA) UPDATE MANAGER
@@ -1405,7 +1582,7 @@ async function startServer() {
   });
 
   app.post('/api/system/simulate-tracking', async (req, res) => {
-    if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Simulation endpoints are disabled in production.' });
+    if (!SIMULATION_ENABLED) return res.status(404).json({ error: 'Simulation endpoints are disabled.' });
     // Spatial Ghosting Scenario Simulation
     io.emit('state-update'); // Ping client to refresh just in case
     
@@ -1432,8 +1609,8 @@ async function startServer() {
   
   app.get('/api/network/p2p-check', (req, res) => {
     // Detect if "Local" by checking IP or a specific header
-    const isLocal = req.query.local === 'true';
-    res.json({ local: isLocal, latency: isLocal ? '0ms' : '240ms' });
+    const isLocal = isLoopbackAddress(req.socket.remoteAddress) || req.query.local === 'true';
+    res.json({ local: isLocal, latency: null, measured: false });
   });
 
   app.post('/api/system/onboarding/qr-handshake', (req, res) => {
@@ -1464,16 +1641,22 @@ async function startServer() {
 
   app.post('/api/system/find-phone', async (req, res) => {
     const result = await stateManager.findPhone();
-    res.json({ success: true, ...result });
+    res.status(result.success ? 200 : 501).json(result);
   });
 
   app.post('/api/devices/lazarus-reboot', async (req, res) => {
     const { id } = req.body;
-    const result = await stateManager.lazarusReboot(id);
-    res.json(result);
+    if (typeof id !== 'string') return res.status(400).json({ error: 'Device id is required.' });
+    try {
+      const result = await stateManager.lazarusReboot(id, res.locals.user.id);
+      res.status(result.status === 'COMPLETED' ? 200 : 202).json(result);
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : 'Reboot request failed.' });
+    }
   });
 
   app.post('/api/system/simulate-coadmin', async (req, res) => {
+    if (!SIMULATION_ENABLED) return res.status(404).json({ error: 'Simulation is disabled.' });
     io.emit('spatial-pulse', 'Co-Admin Parity Conflict: "Lock house" (Husband) vs "Leave open" (Wife) received simultaneously.');
     setTimeout(() => {
       io.emit('spatial-pulse', 'Safety Pause Initiated: Cryptographic authority identical.');
@@ -1482,15 +1665,20 @@ async function startServer() {
   });
 
   // Toggle Subscription (Demo/Dev)
-  app.post('/api/system/toggle-subscription', async (req, res) => {
-    res.json({ success: true, active: true });
+  app.post('/api/system/toggle-subscription', async (_req, res) => {
+    res.status(501).json({ error: 'Subscription state must come from the signed cloud entitlement service.' });
   });
 
   // POWER SOURCE ENDPOINT (Grid Guardian)
   app.post('/api/power-state', async (req, res) => {
+    if (!ALLOW_MANUAL_POWER_SOURCE && !SIMULATION_ENABLED) return res.status(403).json({ error: 'Manual power-source mutation is disabled; use signed telemetry.' });
     const { source } = req.body;
-    await stateManager.setPowerState(source);
-    res.json({ success: true, source });
+    try {
+      const result = await stateManager.setPowerState(source, res.locals.user.id);
+      res.json({ success: true, ...result });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid power state.' });
+    }
   });
 
   // SECURITY UNLOCK (Duress Logic)
@@ -1503,13 +1691,19 @@ async function startServer() {
       return res.status(429).json({ success: false, message: 'Too many attempts. Try again later.' });
     }
     if (typeof pin !== 'string') return res.status(400).json({ success: false, message: 'PIN is required.' });
-    const result = await stateManager.unlockWithPin(pin);
-    if (result.success) pinLimiter.reset(attemptKey);
-    res.status(result.success ? 200 : 401).json(result);
+    try {
+      const result = await stateManager.unlockWithPin(pin);
+      if (result.success) pinLimiter.reset(attemptKey);
+      res.status(result.success ? (result.status === 'COMPLETED' ? 200 : 202) : 401).json(result);
+    } catch (error) {
+      await stateManager.logSecurityEvent('ACCESS_CONTROL_DISPATCH', 'Physical Keypad', 'FAILURE', { error: error instanceof Error ? error.message : 'dispatch-failed' });
+      res.status(409).json({ success: false, message: error instanceof Error ? error.message : 'Door command was not accepted.' });
+    }
   });
 
   // PREDICTIVE ENGINE SIMULATOR
   app.post('/api/simulate-time', async (req, res) => {
+    if (!SIMULATION_ENABLED) return res.status(404).json({ error: 'Simulation is disabled.' });
     const id = await stateManager.triggerAnomaly(
       'Spoilage Warning',
       'Fridge ethylene gas spike detected. Tomatoes in drawer are likely spoiling. Add replacements to grocery list?',
@@ -1519,18 +1713,18 @@ async function startServer() {
     res.json({ success: true, id });
   });
 
-  // IMPROVEMENT: Background Simulation (Every 30 seconds)
-  setInterval(async () => {
-    const chance = Math.random();
-    if (chance > 0.95) { // 5% chance of a random anomaly
-      await stateManager.triggerAnomaly(
-        "Voltage Fluctuation", 
-        "Unstable grid frequency detected. Stabilizing via Inverter...", 
-        "medium", 
-        "energy"
-      );
-    }
-  }, 30000);
+  if (SIMULATION_ENABLED) {
+    setInterval(async () => {
+      if (Math.random() > 0.95) {
+        await stateManager.triggerAnomaly('Voltage Fluctuation', 'Simulation: unstable grid frequency detected.', 'MEDIUM', 'ENERGY');
+      }
+    }, 30_000).unref();
+  }
+
+  void purgeExpiredSnapshots().then(count => count && console.log(`[Snapshots] Purged ${count} expired file(s).`));
+  setInterval(() => {
+    void purgeExpiredSnapshots().then(count => count && console.log(`[Snapshots] Purged ${count} expired file(s).`));
+  }, 24 * 60 * 60_000).unref();
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {

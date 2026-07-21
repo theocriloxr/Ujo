@@ -194,6 +194,20 @@ export function setupMQTT(io: Server, prisma: PrismaClient) {
         }
       }
     }
+    if (data.relayState !== undefined) {
+      const reported = Boolean(data.relayState) ? 'on' : 'off';
+      await (prisma.device as any).updateMany({
+        where: { controlProvider: 'MQTT', controlTarget: nodeId },
+        data: {
+          state: reported,
+          desiredState: null,
+          lastCommandStatus: 'COMPLETED',
+          lastCommandError: null,
+          lastReportedAt: timestamp,
+          status: 'ONLINE'
+        }
+      });
+    }
     if (data.assetRuntimeHours !== undefined) {
       const runtimeHours = numberValue(data.assetRuntimeHours);
       const assets = await prisma.maintenanceAsset.findMany({ where: { nodeId } });
@@ -278,12 +292,27 @@ export function setupMQTT(io: Server, prisma: PrismaClient) {
         const commandId = typeof payload.commandId === 'string' ? payload.commandId : '';
         const success = payload.success === true;
         if (commandId) {
+          const command = await prisma.hardwareCommand.findFirst({ where: { id: commandId, nodeId: envelope.nodeId } });
           await prisma.hardwareCommand.updateMany({
             where: { id: commandId, nodeId: envelope.nodeId, status: 'SENT' },
             data: {
               status: success ? 'COMPLETED' : 'FAILED',
               completedAt: new Date(),
               error: success ? null : String(payload.message || 'Node rejected command')
+            }
+          });
+          const reportedState = command?.action === 'set_relay'
+            ? (command.value === 'true' ? 'on' : 'off')
+            : undefined;
+          await (prisma.device as any).updateMany({
+            where: { controlProvider: 'MQTT', controlTarget: envelope.nodeId },
+            data: {
+              state: success && reportedState ? reportedState : undefined,
+              desiredState: success ? null : undefined,
+              lastCommandStatus: success ? 'COMPLETED' : 'FAILED',
+              lastCommandError: success ? null : String(payload.message || 'Node rejected command'),
+              lastReportedAt: new Date(),
+              status: success ? 'ONLINE' : 'DEGRADED'
             }
           });
         }

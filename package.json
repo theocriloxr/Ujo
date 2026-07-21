@@ -14,7 +14,16 @@
     "check": "npm run lint && npm test && npm run build",
     "mobile:sync": "npm run build && cap sync",
     "mobile:android": "npm run mobile:sync && cap open android",
-    "mobile:ios": "npm run mobile:sync && cap open ios"
+    "mobile:ios": "npm run mobile:sync && cap open ios",
+    "db:health": "node scripts/db-health.mjs",
+    "build:web": "vite build",
+    "check:offline": "npm run lint && npm test && npm run build:web",
+    "vercel:dev": "vercel dev",
+    "hub:install": "sudo bash deployment/hub-installer/install.sh",
+    "hub:factory-bundle": "bash deployment/hub-installer/prepare-factory-bundle.sh",
+    "firmware:check": "bash scripts/check-firmware.sh",
+    "smoke:vercel": "node scripts/smoke-vercel.mjs",
+    "smoke:hub": "node scripts/smoke-hub.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",
@@ -26,7 +35,6 @@
     "@prisma/client": "^6.4.1",
     "@tailwindcss/vite": "^4.1.14",
     "@types/cors": "^2.8.19",
-    "@types/sqlite3": "^3.1.11",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.4",
     "cors": "^2.8.6",
@@ -44,8 +52,6 @@
     "recharts": "^3.8.1",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^6.0.1",
     "vite": "^6.2.3",
     "ws": "^8.20.0"
   },

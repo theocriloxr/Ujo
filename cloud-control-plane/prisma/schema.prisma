@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("CLOUD_DATABASE_URL")
+}
+
+model Organization {
+  id        String       @id @default(uuid())
+  name      String
+  slug      String       @unique
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  homes     Home[]
+  members   Membership[]
+  audit     AuditEvent[]
+}
+
+model CloudUser {
+  id          String       @id @default(uuid())
+  email       String       @unique
+  displayName String
+  passkeyOnly Boolean      @default(false)
+  disabled    Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  commands    RemoteCommand[] @relation("CommandRequester")
+}
+
+model Membership {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  role           String
+  status         String       @default("ACTIVE")
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           CloudUser    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId, status])
+}
+
+model Home {
+  id             String        @id @default(uuid())
+  organizationId String
+  name           String
+  timezone       String
+  countryCode    String
+  status         String        @default("ACTIVE")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  hubs           Hub[]
+  commands       RemoteCommand[]
+  entitlements   Entitlement[]
+  audit          AuditEvent[]
+
+  @@index([organizationId, status])
+}
+
+model Hub {
+  id             String          @id
+  organizationId String
+  homeId         String
+  serialNumber   String          @unique
+  hardwareModel  String
+  softwareVersion String?
+  status         String          @default("UNCLAIMED")
+  lastSeenAt     DateTime?
+  storagePct     Float?
+  temperatureC   Float?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  home           Home            @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  certificates   HubCertificate[]
+  commands       RemoteCommand[]
+  deployments    HubDeployment[]
+
+  @@index([organizationId, homeId, status])
+}
+
+model HubCertificate {
+  id          String   @id @default(uuid())
+  hubId       String
+  fingerprint String   @unique
+  status      String   @default("ACTIVE")
+  notBefore   DateTime
+  notAfter    DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+  hub         Hub      @relation(fields: [hubId], references: [id], onDelete: Cascade)
+
+  @@index([hubId, status, notAfter])
+}
+
+model Entitlement {
+  id             String   @id @default(uuid())
+  organizationId String
+  homeId         String
+  plan           String
+  status         String
+  features       Json
+  issuedAt       DateTime @default(now())
+  validUntil     DateTime
+  signature      String
+  home           Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, homeId, status, validUntil])
+}
+
+model RemoteCommand {
+  id               String    @id @default(uuid())
+  organizationId   String
+  homeId           String
+  hubId            String
+  requestedById    String
+  idempotencyKey   String
+  action           String
+  target           String
+  arguments        Json
+  status           String    @default("REQUESTED")
+  policyDecision   Json?
+  approvalEvidence Json?
+  expiresAt        DateTime
+  deliveredAt      DateTime?
+  acknowledgedAt   DateTime?
+  reportedAt       DateTime?
+  failureCode      String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  home             Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  hub              Hub       @relation(fields: [hubId], references: [id], onDelete: Cascade)
+  requester        CloudUser @relation("CommandRequester", fields: [requestedById], references: [id])
+
+  @@unique([hubId, idempotencyKey])
+  @@index([organizationId, homeId, status, expiresAt])
+  @@index([hubId, createdAt])
+}
+
+model OtaRelease {
+  id              String          @id @default(uuid())
+  version         String          @unique
+  channel         String
+  imageUrl        String
+  imageSha256     String
+  manifest        Json
+  signature       String
+  minimumVersion  String?
+  status          String          @default("DRAFT")
+  createdAt       DateTime        @default(now())
+  publishedAt     DateTime?
+  deployments     HubDeployment[]
+}
+
+model HubDeployment {
+  id          String     @id @default(uuid())
+  hubId       String
+  releaseId   String
+  ring        String
+  status      String     @default("PENDING")
+  startedAt   DateTime?
+  completedAt DateTime?
+  rollbackAt  DateTime?
+  health      Json?
+  error       String?
+  hub         Hub        @relation(fields: [hubId], references: [id], onDelete: Cascade)
+  release     OtaRelease @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+
+  @@unique([hubId, releaseId])
+  @@index([ring, status])
+}
+
+model AuditEvent {
+  id             BigInt        @id @default(autoincrement())
+  organizationId String
+  homeId         String?
+  actorType      String
+  actorId        String
+  eventType      String
+  resourceType   String
+  resourceId     String?
+  outcome        String
+  payload        Json
+  occurredAt     DateTime      @default(now())
+  previousHash   String?
+  eventHash      String        @unique
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  home           Home?         @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, occurredAt])
+  @@index([homeId, occurredAt])
+}

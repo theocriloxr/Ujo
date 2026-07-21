@@ -90,6 +90,10 @@ void handleCommand(char *, byte *bytes, unsigned int length) {
   if (action == "set_relay" && payload["value"].is<bool>()) {
     setRelay(payload["value"].as<bool>());
     acknowledge(commandId, true, "relay-updated");
+  } else if (action == "reboot") {
+    acknowledge(commandId, true, "reboot-accepted");
+    delay(250);
+    ESP.restart();
   } else {
     String message;
     if (handleProfileCommand(action, payload, message)) acknowledge(commandId, true, message.c_str());

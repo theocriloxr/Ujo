@@ -9,7 +9,7 @@
 
 #define UJO_MQTT_HOST "192.168.1.10"
 #define UJO_MQTT_PORT 8883
-#define UJO_MQTT_USERNAME "ujo-node"
+#define UJO_MQTT_USERNAME UJO_NODE_ID
 #define UJO_MQTT_PASSWORD "replace-me"
 
 // Paste the CA that signed the MQTT broker certificate.

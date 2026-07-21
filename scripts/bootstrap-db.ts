@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import sqlite3 from 'sqlite3';
 
 export function databasePath(databaseUrl: string, projectRoot = process.cwd()): string {
   if (!databaseUrl.startsWith('file:')) throw new Error('Ujo currently requires a file: SQLite DATABASE_URL.');
@@ -13,12 +12,8 @@ export function databasePath(databaseUrl: string, projectRoot = process.cwd()): 
 export async function ensureDatabaseContainer(databaseUrl = process.env.DATABASE_URL || 'file:./ujo.db'): Promise<string> {
   const filename = databasePath(databaseUrl);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
-  await new Promise<void>((resolve, reject) => {
-    const database = new sqlite3.Database(filename, error => {
-      if (error) return reject(error);
-      database.close(closeError => closeError ? reject(closeError) : resolve());
-    });
-  });
+  const handle = await fs.promises.open(filename, 'a', 0o600);
+  await handle.close();
   return filename;
 }
 

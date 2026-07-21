@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Ujo",
+  "version": "0.1.0",
+  "identifier": "home.ujo.desktop",
+  "build": { "beforeDevCommand": "npm run dev", "beforeBuildCommand": "npm run build:web", "devUrl": "http://localhost:5173", "frontendDist": "../../dist" },
+  "app": { "windows": [{ "title": "Ujo Home OS", "width": 1440, "height": 960, "minWidth": 1024, "minHeight": 700 }], "security": { "csp": null } },
+  "bundle": { "active": true, "targets": "all", "icon": [] }
+}

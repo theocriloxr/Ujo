@@ -19,9 +19,17 @@ model Device {
   state        String   // ON, OFF, LOCKED, UNLOCKED, or raw values
   category     String   @default("ESSENTIAL") // ESSENTIAL vs HEAVY
   isSheddable  Boolean  @default(true) // If true, system can auto-kill it to save battery
-  powerUsage   Float    @default(0.0) // Watts
-  lastActionAt DateTime @updatedAt
-  status       String   @default("ONLINE")
+  powerUsage       Float     @default(0.0) // Watts
+  lastActionAt     DateTime  @updatedAt
+  status           String    @default("ONLINE")
+  controlProvider  String    @default("UNBOUND") // UNBOUND, SIMULATION, HOME_ASSISTANT, MQTT
+  controlTarget    String?   // HA entity_id or provisioned hardware node id
+  desiredState     String?
+  lastCommandStatus String   @default("IDLE") // IDLE, PENDING_APPROVAL, SENT, COMPLETED, FAILED
+  lastCommandError String?
+  lastReportedAt   DateTime?
+
+  @@index([controlProvider, controlTarget])
 }
 
 model SystemConfig {

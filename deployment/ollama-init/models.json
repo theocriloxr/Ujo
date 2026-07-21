@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "pi": { "assistantBase": "qwen3:1.7b", "vision": "gemma3:1b", "embedding": "embeddinggemma", "recommendedRamGb": 8 },
+    "mini": { "assistantBase": "qwen3:4b", "vision": "gemma3:4b", "embedding": "embeddinggemma", "recommendedRamGb": 16 },
+    "workstation": { "assistantBase": "qwen3:8b", "vision": "gemma3:12b", "embedding": "embeddinggemma", "recommendedRamGb": 32 }
+  },
+  "assistantAlias": "ujo-assistant",
+  "notes": "Models are downloaded during first installation and can be preloaded into a factory image with prepare-factory-bundle.sh. Model licenses must be reviewed before commercial distribution."
+}

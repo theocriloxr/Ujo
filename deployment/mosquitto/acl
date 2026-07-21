@@ -1,0 +1,7 @@
+# Hub service may publish commands and consume all signed node telemetry/acks.
+user ujo_hub
+topic readwrite ujo/v1/#
+
+# Every hardware node must authenticate with username equal to its UJO_NODE_ID.
+# It can only access its own topic subtree.
+pattern readwrite ujo/v1/nodes/%u/#

@@ -13,7 +13,9 @@
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
-    "types": ["vite/client"],
+    "types": [
+      "vite/client"
+    ],
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
@@ -23,5 +25,10 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "mobile-native",
+    "desktop",
+    "api"
+  ]
 }

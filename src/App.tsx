@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
-import { io } from 'socket.io-client';
+import { apiFetch, createHubSocket } from './lib/hubClient';
 
 // --- TYPES ---
 interface Device {
@@ -47,15 +47,23 @@ interface Device {
   category: string;
   isSheddable: boolean;
   powerUsage: number;
+  controlProvider?: 'UNBOUND' | 'SIMULATION' | 'HOME_ASSISTANT' | 'MQTT';
+  controlTarget?: string | null;
+  desiredState?: string | null;
+  lastCommandStatus?: 'IDLE' | 'PENDING_APPROVAL' | 'SENT' | 'COMPLETED' | 'FAILED';
+  lastCommandError?: string | null;
+  lastReportedAt?: string | null;
 }
 
 interface EnergyData {
   grid: string;
-  voltage: number;
+  voltage: number | null;
   status: string;
-  battery: number;
-  solar: number;
-  forecast: string;
+  battery: number | null;
+  solar: number | null;
+  forecast: string | null;
+  totalWatts?: number | null;
+  measuredAt?: string | null;
 }
 
 interface DeviceCardProps {
@@ -91,6 +99,13 @@ interface SystemData {
   alerts: Alert[];
   energy: EnergyData;
   accessProfiles: any[];
+  capabilities?: {
+    simulation: boolean;
+    manualPowerSource: boolean;
+    homeAssistant: boolean;
+    localVoice: boolean;
+    hardwareApprovalRequired: boolean;
+  };
 }
 
 interface HAStatus {
@@ -156,7 +171,7 @@ const AIOrb = ({ active, isVerified }: { active: boolean, isVerified?: boolean }
   </div>
 );
 
-const DigitalTwinMockup = ({ alerts = [], spatialPulseMessage, expandedDeviceId, setExpandedDeviceId }: any) => {
+const DigitalTwinView = ({ alerts = [], spatialPulseMessage, expandedDeviceId, setExpandedDeviceId }: any) => {
   const [cameraFeedActive, setCameraFeedActive] = useState(false);
   const [alertLocation, setAlertLocation] = useState('Unknown Location');
 
@@ -320,7 +335,7 @@ const DigitalTwinMockup = ({ alerts = [], spatialPulseMessage, expandedDeviceId,
 }
 
 
-const TelemetryStrip = ({ history }: { history: any[] }) => {
+const TelemetryStrip = ({ history, energy }: { history: any[]; energy?: EnergyData }) => {
   const [mouseX, setMouseX] = useState(0);
   const [mouseY, setMouseY] = useState(0);
 
@@ -332,11 +347,15 @@ const TelemetryStrip = ({ history }: { history: any[] }) => {
 
   const chartsData = history.slice(-30).map(d => ({
     ...d,
-    power: Math.max(10, (d.voltage || 220) * 0.5 + Math.random() * 20),
-    battery: Math.max(20, 85 + Math.sin(Date.now() / 5000) * 5)
+    power: energy?.totalWatts ?? 0,
+    battery: energy?.battery ?? 0
   }));
 
-  const currentData = chartsData[chartsData.length - 1] || { voltage: 0, power: 0, battery: 0 };
+  const currentData = chartsData[chartsData.length - 1] || {
+    voltage: energy?.voltage ?? 0,
+    power: energy?.totalWatts ?? 0,
+    battery: energy?.battery ?? 0
+  };
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4" onMouseMove={handleMouseMove} onMouseLeave={() => { setMouseX(0); setMouseY(0); }}>
@@ -536,11 +555,14 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
   };
 
   const isActive = device.state === 'on' || device.state === 'unlocked' || device.state === 'normal';
-  const isCritical = device.state === 'critical' || device.status === 'ERROR' || device.status === 'OFFLINE';
+  const isCritical = device.state === 'critical' || device.status === 'ERROR' || device.status === 'OFFLINE' || device.status === 'DEGRADED' || device.lastCommandStatus === 'FAILED';
+  const isPending = device.lastCommandStatus === 'PENDING_APPROVAL' || device.lastCommandStatus === 'SENT';
+  const isUnbound = !device.controlProvider || device.controlProvider === 'UNBOUND';
+  const controlDisabled = isPending || isUnbound || device.type === 'sensor';
 
   const handleReboot = (e: React.MouseEvent) => {
     e.stopPropagation();
-    fetch('/api/devices/lazarus-reboot', {
+    apiFetch('/api/devices/lazarus-reboot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: device.id })
@@ -554,7 +576,7 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
         <motion.div 
           key={i}
           animate={{ height: isActive ? [`${h}%`, `${h+10}%`, `${h}%`] : '10%' }}
-          transition={{ duration: 1 + Math.random(), repeat: Infinity }}
+          transition={{ duration: 1.5, repeat: Infinity }}
           className={`w-0.5 rounded-full ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`}
         />
       ))}
@@ -603,7 +625,7 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
                  transition={{ duration: 1.5, repeat: Infinity }}
                  className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : isCritical ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} 
               />
-              <span className="mono-data text-[7px] text-zinc-600 tracking-widest">{device.status}</span>
+              <span className="mono-data text-[7px] text-zinc-600 tracking-widest">{isPending ? device.lastCommandStatus : isUnbound ? 'UNBOUND' : device.status}</span>
             </div>
           </div>
         </div>
@@ -623,9 +645,11 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
         </div>
 
         <div className="flex items-center gap-3">
-          <button 
-            onClick={(e) => { e.stopPropagation(); onToggle(); }}
-            className={`w-10 h-5 rounded-full relative transition-all ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-white/10'}`}
+          <button
+            disabled={controlDisabled}
+            title={isUnbound ? 'Bind this device to Home Assistant or a provisioned Ujo node first.' : isPending ? 'Command pending confirmation.' : 'Control device'}
+            onClick={(e) => { e.stopPropagation(); if (!controlDisabled) onToggle(); }}
+            className={`w-10 h-5 rounded-full relative transition-all ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-white/10'} ${controlDisabled ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             <motion.div 
               animate={{ x: isActive ? 20 : 0 }}
@@ -743,6 +767,10 @@ export default function App() {
   const ambientAudioRef = React.useRef<AudioContext | null>(null);
   const recorderRef = React.useRef<MediaRecorder | null>(null);
 
+  useEffect(() => {
+    setIsSaaSTier(Boolean(data?.subscriptionActive));
+  }, [data?.subscriptionActive]);
+
   const getTTSContext = () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -752,7 +780,7 @@ export default function App() {
 
   const fetchGuestSessions = async () => {
     try {
-      const res = await fetch('/api/security/guest-sessions');
+      const res = await apiFetch('/api/security/guest-sessions');
       const json = await res.json();
       setGuestSessions(json);
     } catch (e) { console.error(e); }
@@ -760,7 +788,7 @@ export default function App() {
 
   const fetchVoiceSettings = async () => {
     try {
-      const res = await fetch('/api/voice/settings');
+      const res = await apiFetch('/api/voice/settings');
       const json = await res.json();
       setVoiceSettings(json);
     } catch (e) { console.error(e); }
@@ -768,7 +796,7 @@ export default function App() {
 
   const saveVoiceSettings = async (settings: any) => {
     try {
-      await fetch('/api/voice/settings', {
+      await apiFetch('/api/voice/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)
@@ -786,7 +814,7 @@ export default function App() {
     }
 
     try {
-      await fetch('/api/security/revoke-session', {
+      await apiFetch('/api/security/revoke-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
@@ -803,7 +831,7 @@ export default function App() {
 
   const addTrustLog = (message: string, type: 'success' | 'warning' | 'info' | 'error' = 'info') => {
     const log = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${trustLogs.length}`,
       message,
       timestamp: new Date().toLocaleTimeString([], { hour12: false }),
       type
@@ -953,7 +981,7 @@ export default function App() {
     try {
       // The hub tries local speech first; cloud is available only by explicit server configuration.
       const persona = voiceSettings.persona || 'Ujo';
-      const ttsResp = await fetch('/api/voice/synthesize', {
+      const ttsResp = await apiFetch('/api/voice/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, persona })
@@ -1043,7 +1071,7 @@ export default function App() {
     setIsVoiceVerified(false);
 
     try {
-      const response = await fetch('/api/nlp-parse', {
+      const response = await apiFetch('/api/nlp-parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -1092,7 +1120,7 @@ export default function App() {
         stream.getTracks().forEach(track => track.stop());
         try {
           const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-          const response = await fetch('/api/voice/transcribe', {
+          const response = await apiFetch('/api/voice/transcribe', {
             method: 'POST',
             headers: { 'Content-Type': blob.type.split(';')[0] },
             body: blob
@@ -1118,7 +1146,7 @@ export default function App() {
 
   const switchPowerSource = async (source: string) => {
     try {
-      await fetch('/api/power-state', {
+      await apiFetch('/api/power-state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source })
@@ -1149,7 +1177,7 @@ export default function App() {
     try {
       const fetchWithLog = async (url: string) => {
         try {
-          const res = await fetch(url);
+          const res = await apiFetch(url);
           if (!res.ok) {
             console.warn(`Fetch to ${url} returned ${res.status}`);
           }
@@ -1190,7 +1218,9 @@ export default function App() {
 
       // Update Voltage History
       setVoltageHistory(prev => {
-        const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage: jsonStates.energy.voltage }];
+        const voltage = Number(jsonStates.energy?.voltage);
+        if (!Number.isFinite(voltage)) return prev;
+        const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage }];
         return newHistory.slice(-20); // Keep last 20 points
       });
       
@@ -1209,7 +1239,7 @@ export default function App() {
     fetchStates();
     
     // WebSockets implementation to replace polling
-    const socket = io();
+    const socket = createHubSocket();
     socket.on('state_update', (jsonStates) => {
       setData(prevData => {
         // Proactive Update Speak
@@ -1230,7 +1260,9 @@ export default function App() {
 
       // Update Voltage History
       setVoltageHistory(prev => {
-        const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage: jsonStates.energy.voltage }];
+        const voltage = Number(jsonStates.energy?.voltage);
+        if (!Number.isFinite(voltage)) return prev;
+        const newHistory = [...prev, { time: new Date().toLocaleTimeString(), voltage }];
         return newHistory.slice(-20); // Keep last 20 points
       });
     });
@@ -1276,7 +1308,7 @@ export default function App() {
 
     // Fallback polling for HA
     const interval = setInterval(() => {
-      fetch('/api/ha/status')
+      apiFetch('/api/ha/status')
         .then(res => res.json())
         .then(jsonHa => setHaStatus(jsonHa))
         .catch(() => {});
@@ -1284,6 +1316,7 @@ export default function App() {
 
     return () => {
       clearInterval(interval);
+      clearInterval(p2pInterval);
       socket.disconnect();
     };
   }, []);
@@ -1298,7 +1331,7 @@ export default function App() {
 
   const submitPin = async () => {
     try {
-      const res = await fetch('/api/security/unlock', {
+      const res = await apiFetch('/api/security/unlock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: pinBuffer })
@@ -1318,36 +1351,42 @@ export default function App() {
   };
 
   const toggleDevice = async (id: string, currentState: string) => {
-    let nextState = '';
-    
-    // Security Gate for Lock
-    if (id.startsWith('lock') && currentState === 'locked') {
+    const device = data?.devices.find(candidate => candidate.id === id);
+    if (!device) return;
+
+    if (device.type === 'lock' && currentState === 'locked') {
       setShowKeypad(true);
       setLockedActionID(id);
       return;
     }
+    if (device.type === 'lock') {
+      speakResponse('Locking through the authenticated access workflow is not yet exposed on this screen.');
+      return;
+    }
+    if (device.type === 'sensor') return;
 
-    if (id.startsWith('light')) nextState = currentState === 'on' ? 'off' : 'on';
-    else if (id.startsWith('lock')) nextState = currentState === 'locked' ? 'unlocked' : 'locked';
-    else if (id.startsWith('ac')) nextState = currentState === 'on' ? 'off' : 'on';
-    else if (id.startsWith('pump')) nextState = currentState === 'on' ? 'off' : 'on';
-    else return;
-
+    const nextState = currentState.toLowerCase() === 'on' ? 'off' : 'on';
     try {
-      await fetch('/api/device/toggle', {
+      const response = await apiFetch(`/api/devices/${encodeURIComponent(id)}/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, state: nextState })
+        body: JSON.stringify({ state: nextState, reason: 'User dashboard control' })
       });
-      fetchStates();
-    } catch (err) {
-      console.error('Toggle failed', err);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Control request failed.');
+      if (result.status === 'PENDING_APPROVAL') speakResponse('The hardware command is waiting for owner approval.');
+      else if (result.status === 'SENT') speakResponse('Command sent. Waiting for the device to report its state.');
+      await fetchStates();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Control failed.';
+      addTrustLog(`CONTROL_REJECTED: ${message}`, 'warning');
+      speakResponse(message);
     }
   };
 
   const setMode = async (mode: string) => {
     try {
-      await fetch('/api/mode', {
+      await apiFetch('/api/mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode })
@@ -1360,7 +1399,7 @@ export default function App() {
 
   const confirmAlert = async (id: string, action: 'Confirm' | 'Ignore') => {
     try {
-      await fetch('/api/hitl/confirm', {
+      await apiFetch('/api/hitl/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, action })
@@ -1372,7 +1411,7 @@ export default function App() {
   };
 
   const triggerAnomaly = async () => {
-    await fetch('/api/anomaly', { method: 'POST' });
+    await apiFetch('/api/anomaly', { method: 'POST' });
   };
 
 
@@ -1380,7 +1419,7 @@ export default function App() {
     e.preventDefault();
     setVaultError(null);
     try {
-      const res = await fetch('/api/system/vault/auth', {
+      const res = await apiFetch('/api/system/vault/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: vaultPin })
@@ -1406,11 +1445,11 @@ export default function App() {
 
   const completeStep = async (step: 'qr' | 'voice') => {
     if (step === 'qr') {
-      await fetch('/api/system/onboarding/qr-handshake', { method: 'POST' });
+      await apiFetch('/api/system/onboarding/qr-handshake', { method: 'POST' });
       setOnboardingStep('voice');
       speakResponse('Setup step confirmed. You can now test local microphone transcription.');
     } else {
-      await fetch('/api/system/onboarding/voice-calibrate', { method: 'POST' });
+      await apiFetch('/api/system/onboarding/voice-calibrate', { method: 'POST' });
       setOnboardingStep('complete');
       speakResponse('Setup complete. Voice remains a convenience input and does not authorize secure actions.');
       setTimeout(() => setShowOnboarding(false), 2000);
@@ -1420,7 +1459,7 @@ export default function App() {
 
   const toggleLocation = async () => {
     const nextLoc = data?.location === 'Home' ? 'Away' : 'Home';
-    await fetch('/api/location', {
+    await apiFetch('/api/location', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ location: nextLoc })
@@ -1429,22 +1468,22 @@ export default function App() {
   };
 
   const simulateMotion = async () => {
-    await fetch('/api/motion', { method: 'POST' });
+    await apiFetch('/api/motion', { method: 'POST' });
     fetchStates();
   };
 
   const syncHA = async () => {
-    await fetch('/api/ha/sync', { method: 'POST' });
+    await apiFetch('/api/ha/sync', { method: 'POST' });
     fetchStates();
   };
 
   const simulateHealthAlert = async () => {
-    await fetch('/api/health/co2-trigger', { method: 'POST' });
+    await apiFetch('/api/health/co2-trigger', { method: 'POST' });
     fetchStates();
   };
 
   const updateVoiceSetting = async (persona: string, pitch: number, rate: number) => {
-    await fetch('/api/voice/settings', {
+    await apiFetch('/api/voice/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ persona, pitch, rate })
@@ -1454,8 +1493,7 @@ export default function App() {
   };
 
   const checkP2P = async () => {
-    // Simulation: randomly switch between local and cloud to demo the fluid switching
-    const res = await fetch(`/api/network/p2p-check?local=${Math.random() > 0.5}`);
+    const res = await apiFetch('/api/network/p2p-check');
     const json = await res.json();
     setIsLocalConnection(json.local);
   };
@@ -1466,18 +1504,16 @@ export default function App() {
     speakResponse("Verifying BLE RSSI signatures across edge microphones. One moment.");
     
     try {
-      const res = await fetch('/api/system/find-phone', { method: 'POST' });
+      const res = await apiFetch('/api/system/find-phone', { method: 'POST' });
       const json = await res.json();
       
-      setTimeout(() => {
-        setIsFindingPhone(false);
-        setPhoneTrackingResult(json);
-        if (json.status === 'ONLINE') {
-          speakResponse(`Triangulation successful. Your phone is currently in the ${json.room}. Playing sonar ping now.`);
-        } else {
-          speakResponse(json.message);
-        }
-      }, 3000);
+      setIsFindingPhone(false);
+      setPhoneTrackingResult(json);
+      if (json.status === 'ONLINE') {
+        speakResponse(`Triangulation successful. Your phone is currently in the ${json.room}. Playing sonar ping now.`);
+      } else {
+        speakResponse(json.message);
+      }
     } catch (e) {
       setIsFindingPhone(false);
       speakResponse("Unable to locate phone signature. Offline logs unavailable.");
@@ -1485,17 +1521,12 @@ export default function App() {
   };
 
   const toggleSaaSTier = () => {
-    const next = !isSaaSTier;
-    setIsSaaSTier(next);
-    speakResponse(next 
-      ? "SaaS Premium Tier activated. Realistic voice engine and vendor automation unlocked." 
-      : "Reverting to Free Tier. Local core remains active. ElevenLabs and Twilio fallbacks disabled."
-    );
+    speakResponse('Subscription entitlements are read-only on the hub and must be issued by the signed Ujo Cloud service.');
   };
 
   const checkSoftwareUpdate = async () => {
     try {
-      const res = await fetch('/api/system/check-update', { method: 'POST' });
+      const res = await apiFetch('/api/system/check-update', { method: 'POST' });
       const result = await res.json();
       if (!res.ok) {
         speakResponse(result.message);
@@ -1507,13 +1538,13 @@ export default function App() {
   };
 
   const toggleSubscription = async () => {
-    await fetch('/api/system/toggle-subscription', { method: 'POST' });
+    await apiFetch('/api/system/toggle-subscription', { method: 'POST' });
     const nextActive = !data?.subscriptionActive;
     speakResponse(nextActive ? "SaaS Pulse activated. Cloud features and updates enabled." : "SaaS Pulse deactivated. Offline mode only.");
   };
 
   const switchPower = async (source: 'Grid' | 'Inverter' | 'Generator') => {
-    await fetch('/api/power-state', {
+    await apiFetch('/api/power-state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source })
@@ -1522,12 +1553,12 @@ export default function App() {
   };
 
   const simulatePredictive = async () => {
-    await fetch('/api/simulate-time', { method: 'POST' });
+    await apiFetch('/api/simulate-time', { method: 'POST' });
   };
 
   const dispatchVendor = async (vendorType: string) => {
     try {
-      await fetch('/api/vendor/dispatch', {
+      await apiFetch('/api/vendor/dispatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vendorType })
@@ -1537,7 +1568,7 @@ export default function App() {
 
   const generateGuestQR = async () => {
     try {
-      const res = await fetch('/api/security/guest-code', { method: 'POST' });
+      const res = await apiFetch('/api/security/guest-code', { method: 'POST' });
       const responseData = await res.json();
       if (responseData.success && responseData.qrCode) {
         speakResponse("Ephemeral QR code generated. Web-app Sandbox is active. Geofenced permissions strictly valid for 3 hours.");
@@ -1872,7 +1903,9 @@ export default function App() {
                    </div>
                    <button 
                      onClick={toggleSaaSTier}
-                     className={`w-10 h-5 rounded-full relative transition-all ${isSaaSTier ? 'bg-cyan-500' : 'bg-zinc-700'}`}
+                     disabled
+                     title="Subscription status is controlled by signed cloud entitlements."
+                     className={`w-10 h-5 opacity-50 cursor-not-allowed rounded-full relative transition-all ${isSaaSTier ? 'bg-cyan-500' : 'bg-zinc-700'}`}
                    >
                       <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${isSaaSTier ? 'right-1' : 'left-1'}`} />
                    </button>
@@ -1925,7 +1958,7 @@ export default function App() {
 
         {/* Center: Digital Twin & Controls */}
         <div className="col-span-12 lg:col-span-6 flex flex-col gap-6">
-          <DigitalTwinMockup 
+          <DigitalTwinView 
             alerts={data?.alerts || []} 
             spatialPulseMessage={spatialPulseMessage} 
             expandedDeviceId={expandedDeviceId}
@@ -1944,7 +1977,7 @@ export default function App() {
              ))}
           </div>
 
-          <TelemetryStrip history={voltageHistory} />
+          <TelemetryStrip history={voltageHistory} energy={data.energy} />
         </div>
 
         {/* Right: Trust Console & Analytics */}
