@@ -16,7 +16,9 @@ import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import QRCode from 'qrcode';
 import { AttemptLimiter, assertProductionSecrets, hashCredential, hashPin, newSessionToken, safeEqualText, sessionTokenHash, verifyCredential, verifyPin } from './src/services/security.ts';
-import { isBridgeAction, isLoopbackAddress } from './src/services/bridgePolicy.ts';
+import { hubListenHost, isLoopbackAddress } from './src/services/bridgePolicy.ts';
+import { createBridgeRouter } from './src/services/bridgeRouter.ts';
+import { createIdentityRouter, loadIdentityTrust } from './src/services/identityRouter.ts';
 import { OllamaService } from './src/services/OllamaService.ts';
 import { evaluateProposedAction, isSensitiveNaturalLanguage } from './src/services/commandPolicy.ts';
 import { estimateFreshness } from './src/services/FoodIntelligence.ts';
@@ -622,57 +624,17 @@ async function startServer() {
     }
   });
 
-  // MARK-XXXIX/Jarvis compatibility bridge. This intentionally exposes only
-  // smart-home operations; arbitrary shell, filesystem and Docker execution
-  // are never accepted by the home-control process.
-  app.post('/api/v1/execute', async (req, res) => {
-    const configuredToken = process.env.UJO_BRIDGE_TOKEN;
-    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '') ?? '';
-    const authorized = configuredToken
-      ? safeEqualText(bearer, configuredToken)
-      : process.env.NODE_ENV !== 'production' && isLoopbackAddress(req.socket.remoteAddress);
-    if (!authorized) return res.status(401).json({ status: 'error', error: 'Bridge authentication required.' });
-
-    const { action, parameters = {} } = req.body ?? {};
-    if (!isBridgeAction(action)) {
-      return res.status(400).json({ status: 'error', error: 'Unsupported or unsafe bridge action.' });
-    }
-
-    try {
-      if (action === 'status' || action === 'get_state') {
-        const state = await stateManager.getStates();
-        return res.json({ status: 'success', output: action === 'status' ? 'Ujo hub online' : state, state });
-      }
-      if (action === 'list_nodes') {
-        return res.json({ status: 'success', output: 'local', nodes: ['local'] });
-      }
-      if (action === 'power_state') {
-        const source = parameters.source;
-        if (!['MAINS', 'INVERTER', 'GENERATOR', 'SOLAR'].includes(source)) {
-          return res.status(400).json({ status: 'error', error: 'Invalid power source.' });
-        }
-        if (!ALLOW_MANUAL_POWER_SOURCE && !SIMULATION_ENABLED) return res.status(403).json({ status: 'error', error: 'Manual power-source mutation is disabled; use signed energy telemetry.' });
-        await stateManager.setPowerState(source, 'jarvis-bridge');
-        return res.json({ status: 'success', output: `Power source set to ${source}` });
-      }
-      if (action === 'device_control') {
-        const { id, state } = parameters;
-        if (typeof id !== 'string' || typeof state !== 'string' || state.length > 64) {
-          return res.status(400).json({ status: 'error', error: 'Valid device id and state are required.' });
-        }
-        const device = await prisma.device.findUnique({ where: { id } });
-        if (!device) return res.status(404).json({ status: 'error', error: 'Device not found.' });
-        if (device.type === 'lock') {
-          return res.status(403).json({ status: 'error', error: 'Locks require the dedicated authenticated security flow.' });
-        }
-        const result = await stateManager.updateDevice(id, state, 'jarvis-bridge', 'Authenticated MARK-XXXIX bridge request');
-        return res.status(result.status === 'COMPLETED' ? 200 : 202).json({ status: 'success', output: result.message, result });
-      }
-    } catch (error) {
-      console.error('Bridge execution failed:', error);
-      return res.status(500).json({ status: 'error', error: 'Bridge execution failed.' });
-    }
-  });
+  // Shared v1 contract is enforced before any physical device service is reached.
+  app.use(createIdentityRouter({
+    trust: () => loadIdentityTrust(process.env.UJO_IDENTITY_TRUST_FILE),
+    state: () => stateManager.getStates(),
+  }));
+  app.use(createBridgeRouter({
+    env: process.env,
+    state: () => stateManager.getStates(),
+    nodes: () => prisma.hardwareNode.findMany({ select: { id: true }, orderBy: { id: 'asc' } }),
+    control: (id, state) => stateManager.updateDevice(id, state, 'aurel-bridge', 'Authenticated AUREL proposal; UJO retains authority'),
+  }));
 
   // Signed machine-to-machine camera ingestion. This route is intentionally outside
   // user-session middleware; every request uses a per-node secret, timestamp and replay counter.
@@ -1741,7 +1703,7 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, hubListenHost(process.env), () => {
     console.log(`Ujo OS Server running on http://localhost:${PORT}`);
   });
 }
