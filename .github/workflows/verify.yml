@@ -27,7 +27,7 @@ jobs:
             dist
             ujo-sbom.json
   desktop-check:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
