@@ -5,6 +5,12 @@ coverage/
 .DS_Store
 *.log
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite3-*
 .env*
 !.env.example
 !.env.vercel.example
