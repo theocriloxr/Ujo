@@ -1,0 +1,19 @@
+{
+  "name": "@crilox/ujo-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "contracts", "README.md", "LICENSE_STATUS.md"],
+  "scripts": {
+    "lint": "node --check scripts/boundary.mjs && node --check tests/bridge.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "node --test tests/bridge.test.mjs",
+    "boundary": "node scripts/boundary.mjs",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run boundary"
+  },
+  "devDependencies": { "typescript": "5.8.3" }
+}

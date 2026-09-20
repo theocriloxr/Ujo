@@ -1,0 +1,36 @@
+name: Public SDK verification
+on:
+  push:
+    branches: [codex/directive-foundation-20260920]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-sdk:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-sdk-${{ matrix.os }}
+          path: |
+            dist/
+            contracts/
+            README.md
+            LICENSE_STATUS.md
+          if-no-files-found: error

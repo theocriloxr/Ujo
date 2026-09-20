@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UJO HTTP bridge version 1 request",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "status",
+            "get_state",
+            "list_nodes"
+          ]
+        },
+        "parameters": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "action",
+        "parameters"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "device_control"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "state"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "state": {
+              "enum": [
+                "on",
+                "off"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

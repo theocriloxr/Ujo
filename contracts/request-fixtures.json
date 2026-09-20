@@ -1,0 +1,82 @@
+{
+  "valid": [
+    {
+      "action": "status",
+      "parameters": {}
+    },
+    {
+      "action": "get_state",
+      "parameters": {}
+    },
+    {
+      "action": "list_nodes",
+      "parameters": {}
+    },
+    {
+      "action": "device_control",
+      "parameters": {
+        "id": "synthetic-light",
+        "state": "on"
+      }
+    },
+    {
+      "action": "device_control",
+      "parameters": {
+        "id": "synthetic-light",
+        "state": "off"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "action": "power_state"
+    },
+    {
+      "action": "remote_exec"
+    },
+    {
+      "action": "agent_execute"
+    },
+    {
+      "action": "agent_swarm"
+    },
+    {
+      "action": "fs_manipulation"
+    },
+    {
+      "action": "docker_deploy"
+    },
+    {
+      "action": "device_control",
+      "parameters": {
+        "id": "synthetic-light",
+        "state": "unlock"
+      }
+    },
+    {
+      "action": "device_control",
+      "parameters": {
+        "id": "",
+        "state": "on"
+      }
+    },
+    {
+      "action": "device_control",
+      "parameters": {
+        "id": "synthetic-light",
+        "state": "on",
+        "approved": true
+      }
+    },
+    {
+      "action": "get_state",
+      "parameters": {
+        "command": "anything"
+      }
+    },
+    {
+      "action": "status",
+      "approved": true
+    }
+  ]
+}
