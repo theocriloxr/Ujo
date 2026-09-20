@@ -1,0 +1,42 @@
+name: UJO verification
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx --no-install prisma generate
+      - run: npm run check
+      - run: npm audit --audit-level=high
+      - run: npm sbom --sbom-format=cyclonedx > ujo-sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ujo-web-and-sbom
+          path: |
+            dist
+            ujo-sbom.json
+  desktop-check:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build:web
+      - run: rustup update stable --no-self-update
+      - run: cargo check --manifest-path desktop/src-tauri/Cargo.toml
