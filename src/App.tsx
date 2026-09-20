@@ -36,6 +36,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { apiFetch, createHubSocket } from './lib/hubClient';
+import { batteryPresentation } from './lib/telemetryPresentation';
 
 // --- TYPES ---
 interface Device {
@@ -569,25 +570,11 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
     });
   };
 
-  // Mini sparkline mock components
-  const Sparkline = () => (
-    <div className="flex items-end gap-0.5 h-4 opacity-50 px-2">
-      {[12, 18, 14, 22, 19, 25, 20, 24, 15, 21].map((h, i) => (
-        <motion.div 
-          key={i}
-          animate={{ height: isActive ? [`${h}%`, `${h+10}%`, `${h}%`] : '10%' }}
-          transition={{ duration: 1.5, repeat: Infinity }}
-          className={`w-0.5 rounded-full ${isActive ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`}
-        />
-      ))}
-    </div>
-  );
-
   return (
     <motion.div 
       layout
       onClick={onExpand}
-      className={`glass-hud p-4 flex flex-col group cursor-pointer relative transition-all duration-500 ${isActive ? 'border-[var(--accent-gold)]/40 shadow-[0_0_20px_rgba(250,204,21,0.05)]' : ''} ${isExpanded ? 'col-span-2 row-span-2 ring-1 ring-[var(--accent-gold)]/20' : ''}`}
+      className={`glass-hud p-4 flex flex-col group cursor-pointer relative transition-all duration-500 ${isActive ? 'border-[var(--accent-gold)]/40 shadow-[0_0_20px_rgba(250,204,21,0.05)]' : ''} ${isExpanded ? 'sm:col-span-2 row-span-2 ring-1 ring-[var(--accent-gold)]/20' : ''}`}
     >
       {/* Pulsing indicator for anomalous devices */}
       {isCritical && (
@@ -632,7 +619,7 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
         
         {/* Real-time Indicator Visualization */}
         <div className="flex-1 flex justify-end items-center mr-4">
-           {isActive && device.powerUsage > 0 && <Sparkline />}
+
            {!isActive && isCritical && (
              <motion.div 
                animate={{ opacity: [0.3, 1, 0.3] }}
@@ -667,42 +654,10 @@ const DeviceHUDCard = ({ device, onToggle, isExpanded, onExpand }: DeviceCardPro
             exit={{ opacity: 0, height: 0 }}
             className="mt-6 border-t border-white/5 pt-6 space-y-6"
           >
-             <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-                   <span className="mono-data text-[7px] text-zinc-500 block mb-1 uppercase">Signal Strength</span>
-                   <div className="flex items-end gap-0.5 h-3">
-                      {[1,2,3,4,5].map(i => <div key={i} className={`w-1 rounded-full ${i <= 4 ? 'bg-[var(--accent-gold)]' : 'bg-zinc-800'}`} style={{ height: `${i*20}%` }} />)}
-                   </div>
-                </div>
-                <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-                   <span className="mono-data text-[7px] text-zinc-500 block mb-1 uppercase">Relay Path</span>
-                   <span className="text-[10px] font-mono text-zinc-300">HUB_CENTRAL_01</span>
-                </div>
+             <div className="text-xs text-zinc-400 space-y-2">
+               <p>Provider: {device.controlProvider || 'UNBOUND'}</p>
+               <p>Signal strength, brightness and temperature set point are not reported by this device interface.</p>
              </div>
-
-             {device.type === 'light' && (
-                <div className="space-y-3">
-                   <div className="flex justify-between items-center px-1">
-                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Luminance</span>
-                      <span className="text-[10px] font-bold text-[var(--accent-gold)]">85%</span>
-                   </div>
-                   <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-[var(--accent-gold)] w-[85%]" />
-                   </div>
-                </div>
-             )}
-
-             {device.type === 'climate' && (
-                <div className="space-y-3">
-                   <div className="flex justify-between items-center px-1">
-                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Set Point</span>
-                      <span className="text-[10px] font-bold text-[var(--accent-gold)]">22.5°C</span>
-                   </div>
-                   <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-[var(--accent-gold)] w-[65%]" />
-                   </div>
-                </div>
-             )}
 
              <div className="flex gap-3 pt-2">
                 <button 
@@ -727,7 +682,6 @@ export default function App() {
   const [voltageHistory, setVoltageHistory] = useState<{ time: string, voltage: number }[]>([]);
   const [voiceInput, setVoiceInput] = useState('');
   const [nlpResponse, setNlpResponse] = useState<string | null>(null);
-  const [trustScore, setTrustScore] = useState(85);
   const [activeZone, setActiveZone] = useState('Living Room');
   const [activeUser, setActiveUser] = useState('Owner');
   const [chatHistory, setChatHistory] = useState<any[]>([]);
@@ -833,14 +787,11 @@ export default function App() {
     const log = {
       id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${trustLogs.length}`,
       message,
-      timestamp: new Date().toLocaleTimeString([], { hour12: false }),
+      timestamp: new Date().toISOString(),
       type
     };
     setTrustLogs(prev => [log, ...prev].slice(0, 10));
 
-    // Update Trust Score
-    const scoreMap = { success: 1, warning: -2, info: 0, error: -5 };
-    setTrustScore(prev => Math.min(100, Math.max(0, prev + scoreMap[type])));
   };
 
   useEffect(() => {
@@ -1632,41 +1583,27 @@ export default function App() {
       <div className="min-h-screen grid place-items-center bg-[var(--bg)]">
         <div className="flex flex-col items-center gap-4">
           <Cpu className="animate-pulse text-[var(--accent)]" size={48} />
-          <p className="font-mono text-xs tech-text-dim tracking-[0.2em] uppercase italic">Initializing Ujo OS JARVIS Core...</p>
+          <p className="font-mono text-xs tech-text-dim tracking-[0.2em] uppercase italic">Connecting to UJO hub...</p>
         </div>
       </div>
     );
-  }  return (
+  }
+  const battery = batteryPresentation(data.energy.battery);
+  return (
     <div className="min-h-screen bg-[#050505] flex flex-col selection:bg-[var(--accent-gold)] selection:text-black p-4 lg:p-6 pb-20">
       
       {/* Top HUD Header */}
-      <header className="flex justify-between items-start mb-8 z-50">
+      <header className="flex flex-col sm:flex-row flex-wrap gap-4 justify-between items-start mb-8 z-50">
         <div className="flex flex-col">
           <h1 className="text-2xl font-black italic tracking-tighter text-[var(--accent-gold)]">UJO OS</h1>
           <span className="mono-data text-[10px] text-zinc-500 tracking-[0.4em]">Autonomous Context Engine v2.0A</span>
         </div>
         
-        <div className="flex items-center gap-8">
-           <div className="flex flex-col items-center gap-2 group relative">
-              <div className="text-[var(--accent-gold)] font-mono text-[8px] tracking-widest uppercase">System Trust</div>
-              <div className="text-2xl font-black italic text-white leading-none">{trustScore}%</div>
-              <div className="w-20 h-1 bg-white/10 rounded-full overflow-hidden">
-                 <motion.div 
-                   animate={{ width: `${trustScore}%` }}
-                   className={`h-full ${trustScore > 70 ? 'bg-green-500' : trustScore > 40 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                 />
-              </div>
-              
-              {/* Trust Score Tooltip */}
-              <div className="absolute top-full mt-2 w-48 p-3 bg-zinc-900 border border-white/10 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[100] shadow-2xl">
-                 <p className="text-[9px] text-zinc-400 leading-relaxed font-mono">
-                    <span className="text-[var(--accent-gold)] font-bold uppercase block mb-1">Score Matrix:</span>
-                    • System Core Stability<br/>
-                    • Security Event History<br/>
-                    • AI Interaction Success<br/>
-                    • Voice Biometric Accuracy
-                 </p>
-              </div>
+        <div className="flex flex-wrap max-w-full items-center gap-3 sm:gap-6">
+           <div className="flex flex-col gap-1 text-xs" role="status">
+             <span className="text-zinc-400">Data source</span>
+             <strong className="text-[var(--accent-gold)]">{data.capabilities?.simulation ? 'SIMULATION' : 'HUB OBSERVATIONS'}</strong>
+             <span className="text-zinc-400">{data.capabilities?.simulation ? 'Virtual devices; no physical verification' : 'Observation is not safety certification'}</span>
            </div>
 
            <div className="flex flex-col items-end">
@@ -1675,6 +1612,7 @@ export default function App() {
            </div>
            
            <button 
+             aria-label={isGlobalMuted ? 'Enable audio' : 'Mute audio'}
              onClick={() => setIsGlobalMuted(!isGlobalMuted)}
              className={`p-3 rounded-xl border transition-all ${isGlobalMuted ? 'bg-red-500/10 border-red-500/30 text-red-500' : 'bg-white/5 border-white/10 text-zinc-500 hover:bg-white/10'}`}
            >
@@ -1682,6 +1620,7 @@ export default function App() {
            </button>
 
            <button 
+             aria-label="Open settings"
              onClick={() => setShowSettings(true)}
              className="p-3 rounded-xl border bg-white/5 border-white/10 text-zinc-500 hover:bg-white/10 hover:text-[var(--accent-gold)] transition-all"
            >
@@ -1695,7 +1634,7 @@ export default function App() {
       <div className="flex-1 grid grid-cols-12 gap-6 items-start">
         
         {/* Left: Environment & Energy HUD */}
-        <div className="col-span-12 lg:col-span-3 flex flex-col gap-6">
+        <div className="col-span-12 lg:col-span-3 min-w-0 flex flex-col gap-6">
           
           <div className="glass-hud p-6">
             <div className="flex items-center justify-between mb-6">
@@ -1708,7 +1647,7 @@ export default function App() {
                      AUTO_SHEDDING_ACTIVE
                   </div>
                )}
-               {data.energy.battery < 20 && (
+               {battery.low && (
                   <div className="flex items-center gap-1.5 px-2 py-0.5 bg-red-500/20 border border-red-500/30 rounded text-[7px] text-red-500 font-bold animate-pulse">
                      CRITICAL_LOAD
                   </div>
@@ -1731,7 +1670,7 @@ export default function App() {
                <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-1">
                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Input Feed</span>
-                     <span className="text-xs font-bold text-white uppercase">{data.energy.grid === 'Connected' ? 'STABLE' : 'UNSTABLE'}</span>
+                     <span className="text-xs font-bold text-white uppercase">{data.energy.status || 'No telemetry'}</span>
                   </div>
                   <div className="flex flex-col gap-1 items-end">
                      <span className="mono-data text-[8px] text-zinc-500 uppercase">Load Status</span>
@@ -1742,12 +1681,12 @@ export default function App() {
                <div className="space-y-2">
                   <div className="flex justify-between items-center text-[8px] mono-data uppercase">
                      <span className="text-zinc-500">Storage Bank</span>
-                     <span className={data.energy.battery > 50 ? 'text-white' : 'text-red-400'}>{data.energy.battery}%</span>
+                     <span className={battery.low ? 'text-red-400' : 'text-white'}>{battery.label}</span>
                   </div>
                   <div className="h-1 bg-white/10 rounded-full overflow-hidden">
                      <motion.div 
-                       animate={{ width: `${data.energy.battery}%` }}
-                       className={`h-full ${data.energy.battery > 50 ? 'bg-[var(--accent-gold)]' : 'bg-red-500'} shadow-[0_0_10px_rgba(250,204,21,0.3)]`}
+                       animate={{ width: `${battery.percent ?? 0}%` }}
+                       className={`h-full ${battery.low ? 'bg-red-500' : 'bg-[var(--accent-gold)]'}`}
                      />
                   </div>
                </div>
@@ -1851,7 +1790,7 @@ export default function App() {
                    <span className="mono-data text-[10px] tracking-widest italic uppercase">Ecosystem Core</span>
                 </div>
                 <span className={`mono-data text-[8px] px-2 py-0.5 rounded-full border ${isLocalConnection ? 'text-cyan-400 border-cyan-400/30 bg-cyan-400/10' : 'text-zinc-500 border-zinc-700 bg-zinc-900'}`}>
-                   {isLocalConnection ? 'DIRECT_P2P' : 'CLOUD_RELAY'}
+                   {isLocalConnection ? 'LOCAL_CONNECTION' : 'CONNECTION_UNCONFIRMED'}
                 </span>
              </div>
              <div className="flex flex-col gap-3">
@@ -1957,7 +1896,7 @@ export default function App() {
         </div>
 
         {/* Center: Digital Twin & Controls */}
-        <div className="col-span-12 lg:col-span-6 flex flex-col gap-6">
+        <div className="col-span-12 lg:col-span-6 min-w-0 flex flex-col gap-6">
           <DigitalTwinView 
             alerts={data?.alerts || []} 
             spatialPulseMessage={spatialPulseMessage} 
@@ -1965,7 +1904,7 @@ export default function App() {
             setExpandedDeviceId={setExpandedDeviceId}
           />
           
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
              {data.devices.map(dev => (
                <DeviceHUDCard 
                  key={dev.id} 
@@ -1981,7 +1920,7 @@ export default function App() {
         </div>
 
         {/* Right: Trust Console & Analytics */}
-        <div className="col-span-12 lg:col-span-3 flex flex-col gap-6">
+        <div className="col-span-12 lg:col-span-3 min-w-0 flex flex-col gap-6">
            
            {/* The Trust Terminal */}
            <div className="glass-hud flex flex-col h-[400px] border-dashed">
@@ -2005,7 +1944,7 @@ export default function App() {
                 )}
               </div>
               <div className="p-4 border-t border-white/10 bg-black/40">
-                <span className="text-[8px] mono-data tech-text-dim">FRIDAY_CORE: Ready to intervene</span>
+                <span className="text-[8px] mono-data tech-text-dim">UJO policy retains control authority</span>
               </div>
            </div>
 
@@ -2025,14 +1964,15 @@ export default function App() {
 
            <div className="glass-hud p-6 bg-gradient-to-br from-[var(--accent-gold)]/5 to-transparent">
               <span className="mono-data text-[10px] text-zinc-400 block mb-4 uppercase">Load Shedding Impact</span>
-              <span className="block text-3xl font-black italic text-[var(--accent-gold)]">142.8 kWh</span>
-              <span className="text-[9px] mono-data text-zinc-500 tracking-tighter mt-1 block">Cumulative offset since activation</span>
+              <span className="block text-lg font-bold text-zinc-300">Not measured</span>
+              <span className="text-xs text-zinc-400 mt-1 block">Savings require metered history and an explicit baseline.</span>
            </div>
         </div>
 
       </div>
 
       <button 
+        aria-label="Open voice controls"
         onClick={() => setShowVoiceOverlay(true)}
         className="fixed bottom-10 right-10 z-[80] w-16 h-16 rounded-full bg-[var(--accent-gold)] text-black flex items-center justify-center fab-glow hover:scale-110 transition-all pointer-events-auto"
       >
